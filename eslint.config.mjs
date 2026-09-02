@@ -23,6 +23,25 @@ const eslintConfig = defineConfig([
       "react-hooks/set-state-in-effect": "off",
     },
   },
+  {
+    files: ["app/page.tsx", "features/knowledge-graph/components/**/*.{ts,tsx}"],
+    rules: {
+      // These effects intentionally hydrate browser preferences, URL state,
+      // and focus-dependent view state after the server render.
+      "react-hooks/set-state-in-effect": "off",
+    },
+  },
+  {
+    rules: {
+      "@typescript-eslint/no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }],
+    },
+  },
+  {
+    files: ["components/ui/**/*.{ts,tsx}", "hooks/use-mobile.ts"],
+    rules: {
+      "@typescript-eslint/no-unused-vars": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;

@@ -28,6 +28,7 @@ npm.cmd run start
 - `data/repositories/`：可替换的知识仓库接口与离线静态实现。
 - `features/knowledge-graph/`：树、SVG 图谱、知识卡片、LaTeX 公式与视图适配。
 - `core/agent/`、`server/agent/`：离线四 Agent 合约、审查门禁、GraphPatch、确认、回滚与审计重放。
+- `features/agent/`：拓扑图下方的当前节点问答与知识缺口深度搜索界面。
 
 ## 知识关系与卡片
 
@@ -38,6 +39,8 @@ npm.cmd run start
 ## Agent 写入规则
 
 离线工作流为：对话摘要和当前节点 → Knowledge Agent 候选与证据 → Review Agent 结构审查 → Build Agent 生成确定性 GraphPatch 和 SVG 差异预览 → Development Agent 编排 → 用户确认、要求修订或拒绝。未经确认不写入；支持幂等提交、追加式回滚和审计重放。
+
+当用户认为当前节点覆盖不足时，可在拓扑图下方点击“深度搜索知识缺口”。离线模式会检查 13 类卡片维度，并对相似/替代、同层、子级、依赖和输入输出关系执行有界搜索，形成待审查构建候选。配置外部检索服务后可沿用同一候选与审查协议补充来源证据。
 
 ## 验证
 

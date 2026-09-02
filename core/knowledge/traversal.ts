@@ -89,11 +89,29 @@ export function getLocalGraph(
     for (const edge of adjacent) {
       const endpoint = nodeById.get(otherEndpoint(edge, current.id) ?? "");
       if (!endpoint) continue;
-      if (["PREREQUISITE_OF", "USES_MODEL", "DERIVED_FROM"].includes(edge.type)) {
+      if (edge.type === "PREREQUISITE_OF") {
+        candidates.push({
+          node: endpoint,
+          reason: edge.targetId === current.id ? "prerequisite" : "dependent",
+          priority: 4,
+        });
+      }
+      if (edge.type === "USES_MODEL" || edge.type === "DERIVED_FROM") {
         candidates.push({ node: endpoint, reason: "dependency", priority: 4 });
       }
-      if (edge.type === "INPUT_TO" || edge.type === "OUTPUT_OF") {
-        candidates.push({ node: endpoint, reason: "input_output", priority: 5 });
+      if (edge.type === "INPUT_TO") {
+        candidates.push({
+          node: endpoint,
+          reason: edge.targetId === current.id ? "input" : "downstream",
+          priority: 5,
+        });
+      }
+      if (edge.type === "OUTPUT_OF") {
+        candidates.push({
+          node: endpoint,
+          reason: edge.targetId === current.id ? "output" : "producer",
+          priority: 5,
+        });
       }
     }
     const bestById = new Map<string, Candidate>();

@@ -44,5 +44,7 @@ test("the page exposes the requested controls without implementation copy", asyn
   assert.match(source, /展开字母与符号解释/);
   assert.match(source, /开启或关闭连线流动/);
   assert.match(source, /当前节点优先/);
+  assert.match(source, /className="graph-workbench"[\s\S]*KnowledgeGraphCanvas[\s\S]*AgentPanel[\s\S]*<aside/);
+  assert.doesNotMatch(source, /InspectorTab|inspectorTab|role="tablist"/);
   assert.doesNotMatch(source, /当前拓扑中心|>局部拓扑<|父子知识关系|跨域知识关系/);
 });

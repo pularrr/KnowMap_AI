@@ -22,8 +22,8 @@ test("peer-first traversal ranks explicit alternatives before implicit siblings 
   assert.deepEqual(local.visits[0], { nodeId: "gnn", depth: 0, reason: "anchor" });
   assert.equal(local.visits.find((visit) => visit.nodeId === "jpda").reason, "alternative");
   assert.equal(local.visits.find((visit) => visit.nodeId === "hungarian-algorithm").reason, "sibling");
-  assert.equal(local.visits.find((visit) => visit.nodeId === "statistical-gating").reason, "dependency");
-  const rank = { similar: 0, alternative: 1, sibling: 2, child: 3, dependency: 4, input_output: 5 };
+  assert.equal(local.visits.find((visit) => visit.nodeId === "statistical-gating").reason, "prerequisite");
+  const rank = { similar: 0, alternative: 1, sibling: 2, child: 3, prerequisite: 4, dependent: 4, dependency: 4, input: 5, downstream: 5, output: 5, producer: 5 };
   const priorities = local.visits.slice(1).map((visit) => rank[visit.reason]);
   assert.deepEqual(priorities, [...priorities].sort((a, b) => a - b));
 });
@@ -48,4 +48,15 @@ test("VisibleGraphProjection preserves the current three-column contract", () =>
 
 test("unknown anchors fail explicitly", () => {
   assert.throws(() => getLocalGraph(expandedKnowledgeDataset, "missing-node"), /Unknown knowledge node/);
+});
+
+test("directed dependency and input-output traversal preserves semantic direction", () => {
+  const fromGnn = getLocalGraph(expandedKnowledgeDataset, "gnn", { maxDepth: 1, maxNodes: 20 });
+  assert.equal(fromGnn.visits.find((visit) => visit.nodeId === "statistical-gating").reason, "prerequisite");
+  const fromGate = getLocalGraph(expandedKnowledgeDataset, "statistical-gating", { maxDepth: 1, maxNodes: 20 });
+  assert.equal(fromGate.visits.find((visit) => visit.nodeId === "gnn").reason, "dependent");
+  const fromInnovation = getLocalGraph(expandedKnowledgeDataset, "innovation", { maxDepth: 1, maxNodes: 20 });
+  assert.equal(fromInnovation.visits.find((visit) => visit.nodeId === "mahalanobis-gate").reason, "downstream");
+  const fromMahalanobis = getLocalGraph(expandedKnowledgeDataset, "mahalanobis-gate", { maxDepth: 1, maxNodes: 20 });
+  assert.equal(fromMahalanobis.visits.find((visit) => visit.nodeId === "innovation").reason, "input");
 });

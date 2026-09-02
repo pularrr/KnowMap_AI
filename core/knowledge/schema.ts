@@ -188,8 +188,13 @@ export type TraversalReason =
   | "alternative"
   | "sibling"
   | "child"
+  | "prerequisite"
+  | "dependent"
   | "dependency"
-  | "input_output";
+  | "input"
+  | "downstream"
+  | "output"
+  | "producer";
 
 export interface TraversalVisit {
   nodeId: string;

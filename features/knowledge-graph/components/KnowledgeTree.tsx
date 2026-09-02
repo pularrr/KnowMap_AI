@@ -123,7 +123,7 @@ function KnowledgeTreeItem({
   const isOpen = expanded.has(node.id);
   const active = node.id === focusId || node.id === selectedId;
   return (
-    <div className="tree-node" role="treeitem" aria-expanded={children.length ? isOpen : undefined}>
+    <div className="tree-node" role="treeitem" aria-selected={active} aria-expanded={children.length ? isOpen : undefined}>
       <div className={`tree-row ${active ? "active" : ""}`} style={{ paddingLeft: 5 + depth * 13 }}>
         <button
           className={`tree-chevron ${isOpen ? "open" : ""}`}

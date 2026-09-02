@@ -7,13 +7,10 @@ import { KnowledgeGraphCanvas } from "../features/knowledge-graph/components/Kno
 import { KnowledgeTree } from "../features/knowledge-graph/components/KnowledgeTree";
 import { nodeMap } from "../features/knowledge-graph/layout/legacySvgLayout";
 import {
-  branchMeta,
   graphRevision,
   knowledgeNodes,
   semanticDomainCount,
 } from "../features/knowledge-graph/model/knowledgeViewModel";
-
-type InspectorTab = "card" | "agent";
 
 // Extracted UI contract: 知识域树 · 复制 LaTeX · 展开字母与符号解释 · 开启或关闭连线流动 · 当前节点优先
 
@@ -22,7 +19,6 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState("fmcw");
   const [dark, setDark] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
-  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("card");
 
   useEffect(() => {
     setDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
@@ -64,7 +60,7 @@ export default function Home() {
           <div>
             <div className="eyebrow">RADAR SYSTEMS · KNOWLEDGE GRAPH</div>
             <h1>
-              FMCW 雷达全栈知识图谱 <em>P1.0</em>
+              FMCW 雷达全栈知识图谱 <em>P1.1</em>
             </h1>
           </div>
         </div>
@@ -90,12 +86,15 @@ export default function Home() {
 
       <section className="workspace" aria-label="FMCW 雷达知识图谱工作区">
         <KnowledgeTree focusId={focusId} selectedId={selectedId} onReveal={reveal} />
-        <KnowledgeGraphCanvas
-          focusId={focusId}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-          onReveal={reveal}
-        />
+        <div className="graph-workbench">
+          <KnowledgeGraphCanvas
+            focusId={focusId}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            onReveal={reveal}
+          />
+          <AgentPanel key={selected.id} selected={selected} onReveal={reveal} />
+        </div>
         <aside className={inspectorOpen ? "inspector open" : "inspector"}>
           <button
             className="inspector-toggle"
@@ -105,39 +104,18 @@ export default function Home() {
             {inspectorOpen ? "›" : "‹"}
           </button>
           <div className="inspector-content">
-            <div className="inspector-tabs" role="tablist" aria-label="右侧面板">
-              <button
-                role="tab"
-                aria-selected={inspectorTab === "card"}
-                className={inspectorTab === "card" ? "active" : ""}
-                onClick={() => setInspectorTab("card")}
-              >
-                知识卡片
-              </button>
-              <button
-                role="tab"
-                aria-selected={inspectorTab === "agent"}
-                className={inspectorTab === "agent" ? "active" : ""}
-                onClick={() => setInspectorTab("agent")}
-              >
-                Agent
-              </button>
-            </div>
-            {inspectorTab === "card" ? (
-              <KnowledgeCardPanel selectedId={selectedId} onReveal={reveal} />
-            ) : (
-              <AgentPanel selected={selected} onBackToCard={() => setInspectorTab("card")} />
-            )}
+            <div className="inspector-heading">知识卡片</div>
+            <KnowledgeCardPanel selectedId={selectedId} onReveal={reveal} />
           </div>
         </aside>
       </section>
 
       <footer className="statusbar">
         <span>
-          <i className="online" />P1.0 知识图谱 · 数据修订 {graphRevision}
+          <i className="online" />P1.1 知识图谱 · 数据修订 {graphRevision}
         </span>
         <span>点击节点阅读 · 小型 ＋/− 展开收起 · 有界拖动</span>
-        <span>右侧提供知识卡片与当前节点优先 Agent</span>
+        <span>右侧知识卡片 · 拓扑下方当前节点优先 Agent</span>
       </footer>
     </main>
   );
