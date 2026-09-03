@@ -19,7 +19,8 @@ test("deep search anchors coverage analysis to the current node", () => {
   const report = search.runOfflineDeepSearch("gnn");
   assert.equal(report.nodeId, "gnn");
   assert.match(report.title, /GNN/);
-  assert.ok(report.coverage.total >= 10);
+  assert.ok(report.coverage.total >= 6);
+  assert.ok(report.coverage.total < 13, "optional or inapplicable sections must not create false gaps");
   assert.ok(report.coverage.missing.length > 0);
   assert.ok(report.candidates.some((candidate) => candidate.nodeId === "jpda"));
   assert.ok(report.recommendations.some((item) => /Review Agent/.test(item)));

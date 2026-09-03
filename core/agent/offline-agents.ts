@@ -147,6 +147,28 @@ export class OfflineReviewAgent implements ReviewAgent {
         findings.push({ code: "ORPHAN_CARD", severity: "error", message: `Card ${card.nodeId} has no node.` });
       }
     }
+    const formulaIds = new Set((projected.formulas ?? []).map((formula) => formula.id));
+    const evidenceIdsInGraph = new Set((projected.evidence ?? []).map((item) => item.id));
+    const assetIds = new Set((projected.assets ?? []).map((asset) => asset.id));
+    const sourceIds = new Set((projected.sources ?? []).map((source) => source.id));
+    for (const formula of projected.formulas ?? []) {
+      if (!nodes.has(formula.nodeId)) findings.push({ code: "ORPHAN_FORMULA", severity: "error", message: `Formula ${formula.id} has no node.` });
+      if (!formula.latex.trim() || !formula.symbols.length) findings.push({ code: "INCOMPLETE_FORMULA", severity: "error", message: `Formula ${formula.id} needs LaTeX and symbols.` });
+    }
+    for (const card of projected.cards) {
+      for (const formulaId of card.formulaIds ?? []) {
+        if (!formulaIds.has(formulaId)) findings.push({ code: "UNKNOWN_CARD_FORMULA", severity: "error", message: `Card ${card.nodeId} references ${formulaId}.` });
+      }
+      for (const evidenceId of card.evidenceIds ?? []) {
+        if (!evidenceIdsInGraph.has(evidenceId)) findings.push({ code: "UNKNOWN_CARD_EVIDENCE", severity: "error", message: `Card ${card.nodeId} references ${evidenceId}.` });
+      }
+    }
+    for (const item of projected.evidence ?? []) {
+      if (item.assetId && !assetIds.has(item.assetId)) findings.push({ code: "UNKNOWN_EVIDENCE_ASSET", severity: "error", message: `Evidence ${item.id} references ${item.assetId}.` });
+    }
+    for (const claim of projected.claims ?? []) {
+      if (!sourceIds.has(claim.artifactId)) findings.push({ code: "UNKNOWN_CLAIM_SOURCE", severity: "error", message: `Claim ${claim.id} references ${claim.artifactId}.` });
+    }
     for (const node of projected.nodes) {
       const parentId = parentOf(node);
       if (parentId && !nodes.has(parentId)) {
@@ -193,6 +215,15 @@ export class OfflineReviewAgent implements ReviewAgent {
       case "remove-edge": return `edge:${operation.edgeId}`;
       case "upsert-card": return `card:${operation.card.nodeId}`;
       case "remove-card": return `card:${operation.nodeId}`;
+      case "upsert-formula": return `formula:${operation.formula.id}`;
+      case "remove-formula": return `formula:${operation.formulaId}`;
+      case "upsert-evidence": return `evidence:${operation.evidence.id}`;
+      case "remove-evidence": return `evidence:${operation.evidenceId}`;
+      case "upsert-asset": return `asset:${operation.asset.id}`;
+      case "remove-asset": return `asset:${operation.assetId}`;
+      case "upsert-source": return `source:${operation.source.id}`;
+      case "upsert-claim": return `claim:${operation.claim.id}`;
+      case "append-history": return `history:${operation.entry.id}`;
     }
   }
 }

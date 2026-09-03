@@ -48,3 +48,35 @@ test("the page exposes the requested controls without implementation copy", asyn
   assert.doesNotMatch(source, /InspectorTab|inspectorTab|role="tablist"/);
   assert.doesNotMatch(source, /当前拓扑中心|>局部拓扑<|父子知识关系|跨域知识关系/);
 });
+
+test("Agent and knowledge-card source expose the compact unified interaction contract", async () => {
+  const agent = await readFile(new URL("../features/agent/components/AgentPanel.tsx", import.meta.url), "utf8");
+  const card = await readFile(new URL("../features/knowledge-graph/components/KnowledgeCardPanel.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(agent, /\/api\/agent\/deep-search/);
+  assert.match(agent, /总结对话/);
+  assert.match(agent, /确认写入/);
+  assert.match(agent, /knowledge_candidate/);
+  assert.match(agent, /"collapsed" \| "compact" \| "overlay"/);
+  assert.match(card, /理论知识/);
+  assert.match(card, /应用知识/);
+  assert.match(card, /其他知识/);
+  assert.match(card, /历史修改/);
+  assert.match(card, /生成变更预览/);
+  assert.match(card, /确认保存/);
+  assert.doesNotMatch(card, /Agent 默认不读取此页/);
+  assert.match(styles, /\.graph-agent \{[^}]*height: 200px/);
+  assert.match(styles, /\.graph-agent\.overlay \{[^}]*position: absolute/);
+  assert.match(styles, /\.resize-handle/);
+  assert.match(styles, /font-size: 12px !important/);
+});
+
+test("topology columns preserve primary-tree depth when a parent is opened", async () => {
+  const layout = await vite.ssrLoadModule("/features/knowledge-graph/layout/legacySvgLayout.ts");
+  const positioned = layout.arrange(layout.nodeMap.get("chirp"));
+  const byId = new Map(positioned.map((node) => [node.id, node]));
+  assert.equal(byId.get("chirp").x, byId.get("dechirp").x);
+  assert.equal(byId.get("chirp").x, byId.get("data-cube").x);
+  assert.ok(byId.get("slope").x > byId.get("chirp").x);
+  assert.equal(byId.has("range-processing"), false, "an unrelated semantic neighbour must not be promoted into the child column");
+});

@@ -32,6 +32,10 @@ export class InMemoryRevisionStore {
     return [...this.history.keys()].sort((left, right) => left - right);
   }
 
+  rollbackTargets(limit = 2): readonly Revision[] {
+    return this.revisionHistory().filter((revision) => revision < this.current.revision).slice(-limit).reverse();
+  }
+
   authorize(
     action: ConfirmationReceipt["action"],
     subject: string,
@@ -63,6 +67,7 @@ export class InMemoryRevisionStore {
     const revision = previousRevision + 1;
     this.current = applyOperations(this.current, patch.operations, revision);
     this.history.set(revision, clone(this.current));
+    this.pruneSavedVersions();
     const result: CommitResult = {
       patchId: patch.id,
       previousRevision,
@@ -76,18 +81,27 @@ export class InMemoryRevisionStore {
 
   rollback(targetRevision: Revision, receipt: ConfirmationReceipt): RollbackResult {
     this.consume(receipt, "rollback", String(targetRevision));
+    if (!this.rollbackTargets().includes(targetRevision)) {
+      throw new Error(`Revision ${targetRevision} is outside the two available historical versions.`);
+    }
     const target = this.history.get(targetRevision);
     if (!target) throw new Error(`Revision ${targetRevision} does not exist.`);
     const previousRevision = this.current.revision;
     const revision = previousRevision + 1;
     this.current = { ...clone(target), revision };
     this.history.set(revision, clone(this.current));
+    this.pruneSavedVersions();
     return {
       restoredFromRevision: targetRevision,
       previousRevision,
       revision,
       appliedAt: new Date().toISOString(),
     };
+  }
+
+  private pruneSavedVersions(): void {
+    const revisions = [...this.history.keys()].sort((left, right) => left - right);
+    for (const revision of revisions.slice(0, -3)) this.history.delete(revision);
   }
 
   private receiptKey(receipt: ConfirmationReceipt): string {

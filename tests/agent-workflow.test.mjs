@@ -136,3 +136,36 @@ test("rollback appends a revision and the full audit can replay the final graph"
   const replayed = server.replayAudit(initial, workflow.auditLog());
   assert.deepEqual(replayed, workflow.snapshot());
 });
+
+test("the workflow keeps one recent and two historical saved revisions", () => {
+  const workflow = createWorkflow(validFactory);
+  for (let index = 0; index < 4; index += 1) {
+    const candidate = workflow.submit({ conversationSummary: `Save ${index}` });
+    workflow.confirm(candidate.patch.id, { confirmed: true, confirmedBy: "reviewer" });
+  }
+  assert.deepEqual(workflow.revisionHistory(), [2, 3, 4]);
+  assert.deepEqual(workflow.rollbackTargets(), [3, 2]);
+  assert.throws(
+    () => workflow.rollback(1, { confirmed: true, confirmedBy: "reviewer" }),
+    /two available historical versions/,
+  );
+});
+
+test("graph operations atomically include formulas, evidence, assets, sources, claims and history", () => {
+  const snapshot = { ...initial, revision: 0 };
+  const source = { id: "source-1", title: "Paper", kind: "paper", modality: "text", mimeType: "text/plain", checksum: "sha256:x", suppliedAt: "2026-09-03T00:00:00Z", suppliedBy: "user" };
+  const projected = core.applyOperations(snapshot, [
+    { kind: "upsert-asset", asset: { id: "asset-1", modality: "document", mimeType: "application/pdf", storageRef: "asset.pdf", checksum: "sha256:y" } },
+    { kind: "upsert-evidence", evidence: { id: "evidence-1", title: "Paper", sourceType: "paper", assetId: "asset-1" } },
+    { kind: "upsert-source", source },
+    { kind: "upsert-claim", claim: { id: "claim-1", artifactId: "source-1", segmentIds: ["segment-1"], statement: "Claim", shortSummary: "Claim", suggestedCollection: "other", confidence: 0.8 } },
+    { kind: "upsert-formula", formula: { id: "formula-1", nodeId: "fmcw", name: "Test", latex: "x", sourceText: "x", meaning: "x", symbols: [{ symbol: "x", latex: "x", definition: "test" }], assumptions: [], evidenceIds: ["evidence-1"] } },
+    { kind: "append-history", entry: { id: "history-1", nodeId: "fmcw", kind: "knowledge_imported", summary: "Imported paper claim", occurredAt: "2026-09-03T00:00:00Z", sourceArtifactId: "source-1" } },
+  ], 1);
+  assert.equal(projected.formulas.length, 1);
+  assert.equal(projected.evidence.length, 1);
+  assert.equal(projected.assets.length, 1);
+  assert.equal(projected.sources.length, 1);
+  assert.equal(projected.claims.length, 1);
+  assert.equal(projected.history.length, 1);
+});

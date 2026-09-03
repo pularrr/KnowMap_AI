@@ -7,31 +7,34 @@ import {
   type KnowledgeNode,
 } from "../model/knowledgeViewModel";
 import { ancestorsOf, childrenMap } from "../layout/legacySvgLayout";
+import type { LayoutIndex } from "../layout/legacySvgLayout";
 
 type KnowledgeTreeProps = {
   focusId: string;
   selectedId: string;
   onReveal: (id: string) => void;
+  nodes?: readonly KnowledgeNode[];
+  layoutIndex?: LayoutIndex;
 };
 
-export function KnowledgeTree({ focusId, selectedId, onReveal }: KnowledgeTreeProps) {
+export function KnowledgeTree({ focusId, selectedId, onReveal, nodes = knowledgeNodes, layoutIndex }: KnowledgeTreeProps) {
   const [treeQuery, setTreeQuery] = useState("");
   const [expandedTree, setExpandedTree] = useState<Set<string>>(() => new Set(["fmcw"]));
 
   const treeMatches = useMemo(() => {
     const query = treeQuery.trim().toLocaleLowerCase();
     if (!query) return [];
-    return knowledgeNodes
+    return nodes
       .filter((node) =>
         `${node.title} ${node.subtitle} ${node.summary}`.toLocaleLowerCase().includes(query),
       )
       .slice(0, 18);
-  }, [treeQuery]);
+  }, [treeQuery, nodes]);
 
   useEffect(() => {
     setTreeQuery("");
     setExpandedTree((previous) =>
-      new Set([...previous, focusId, ...ancestorsOf(focusId).map((node) => node.id)]),
+      new Set([...previous, focusId, ...ancestorsOf(focusId, layoutIndex).map((node) => node.id)]),
     );
   }, [focusId]);
 
@@ -75,7 +78,7 @@ export function KnowledgeTree({ focusId, selectedId, onReveal }: KnowledgeTreePr
             {!treeMatches.length && <p>没有匹配的知识点</p>}
           </div>
         ) : (
-          knowledgeNodes
+          nodes
             .filter((node) => !node.parent)
             .map((node) => (
               <KnowledgeTreeItem
@@ -85,6 +88,7 @@ export function KnowledgeTree({ focusId, selectedId, onReveal }: KnowledgeTreePr
                 focusId={focusId}
                 selectedId={selectedId}
                 expanded={expandedTree}
+                layoutIndex={layoutIndex}
                 onToggle={(id) =>
                   setExpandedTree((previous) => {
                     const next = new Set(previous);
@@ -110,6 +114,7 @@ function KnowledgeTreeItem({
   expanded,
   onToggle,
   onReveal,
+  layoutIndex,
 }: {
   node: KnowledgeNode;
   depth: number;
@@ -118,8 +123,9 @@ function KnowledgeTreeItem({
   expanded: Set<string>;
   onToggle: (id: string) => void;
   onReveal: (id: string) => void;
+  layoutIndex?: LayoutIndex;
 }) {
-  const children = childrenMap.get(node.id) ?? [];
+  const children = (layoutIndex?.childrenMap ?? childrenMap).get(node.id) ?? [];
   const isOpen = expanded.has(node.id);
   const active = node.id === focusId || node.id === selectedId;
   return (
@@ -149,6 +155,7 @@ function KnowledgeTreeItem({
               focusId={focusId}
               selectedId={selectedId}
               expanded={expanded}
+              layoutIndex={layoutIndex}
               onToggle={onToggle}
               onReveal={onReveal}
             />

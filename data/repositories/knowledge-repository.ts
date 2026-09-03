@@ -3,9 +3,17 @@ import type {
   KnowledgeDataset,
   KnowledgeEdge,
   KnowledgeFormula,
+  KnowledgeHistoryEntry,
   KnowledgeNode,
   SemanticDomain,
 } from "@/core/knowledge/schema";
+
+export interface HistoryRetrievalPolicy {
+  /** Must be true because history is excluded from normal Agent retrieval. */
+  includeHistory: true;
+  /** Optional explicit user-selected history records. */
+  historyIds: readonly string[];
+}
 
 export interface KnowledgeRepository {
   getSnapshot(): KnowledgeDataset;
@@ -16,4 +24,5 @@ export interface KnowledgeRepository {
   getCard(nodeId: string): KnowledgeCard | undefined;
   getFormulas(nodeId: string): KnowledgeFormula[];
   getEdges(nodeId?: string): KnowledgeEdge[];
+  getHistory(nodeId: string, policy?: HistoryRetrievalPolicy): KnowledgeHistoryEntry[];
 }

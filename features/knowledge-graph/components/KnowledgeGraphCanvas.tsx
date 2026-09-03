@@ -4,7 +4,9 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerE
 import {
   branchMeta,
   getVisibleRelations,
+  getVisibleRelationsFromDataset,
 } from "../model/knowledgeViewModel";
+import type { KnowledgeDataset } from "../../../core/knowledge/schema";
 import {
   NODE_H,
   NODE_W,
@@ -19,6 +21,7 @@ import {
   nodeMap,
   type TraceMode,
   type Viewport,
+  type LayoutIndex,
 } from "../layout/legacySvgLayout";
 
 type KnowledgeGraphCanvasProps = {
@@ -26,6 +29,8 @@ type KnowledgeGraphCanvasProps = {
   selectedId: string;
   onSelect: (id: string) => void;
   onReveal: (id: string) => void;
+  dataset?: KnowledgeDataset;
+  layoutIndex?: LayoutIndex;
 };
 
 export function KnowledgeGraphCanvas({
@@ -33,6 +38,8 @@ export function KnowledgeGraphCanvas({
   selectedId,
   onSelect,
   onReveal,
+  dataset,
+  layoutIndex,
 }: KnowledgeGraphCanvasProps) {
   const dragRef = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
   const [traceMode, setTraceMode] = useState<TraceMode>("context");
@@ -50,21 +57,26 @@ export function KnowledgeGraphCanvas({
     setTraceMode("context");
   }, [focusId]);
 
-  const focus = nodeMap.get(focusId) ?? nodeMap.get("fmcw")!;
-  const selected = nodeMap.get(selectedId) ?? focus;
-  const positioned = useMemo(() => arrange(focus), [focus]);
+  const activeNodeMap = layoutIndex?.nodeMap ?? nodeMap;
+  const activeChildrenMap = layoutIndex?.childrenMap ?? childrenMap;
+  const focus = activeNodeMap.get(focusId) ?? activeNodeMap.get("fmcw")!;
+  const selected = activeNodeMap.get(selectedId) ?? focus;
+  const positioned = useMemo(() => arrange(focus, layoutIndex), [focus, layoutIndex]);
   const positionedMap = useMemo(
     () => new Map(positioned.map((node) => [node.id, node])),
     [positioned],
   );
-  const semanticRelations = useMemo(() => getVisibleRelations(focus.id), [focus.id]);
+  const semanticRelations = useMemo(
+    () => dataset ? getVisibleRelationsFromDataset(dataset, focus.id) : getVisibleRelations(focus.id),
+    [dataset, focus.id],
+  );
   const semanticContextIds = useMemo(
     () => new Set(semanticRelations.flatMap((relation) => [relation.from, relation.to])),
     [semanticRelations],
   );
   const focusPosition = positionedMap.get(focus.id);
-  const ancestorIds = new Set(ancestorsOf(selected.id).map((node) => node.id));
-  const descendantIds = descendantsOf(selected.id);
+  const ancestorIds = new Set(ancestorsOf(selected.id, layoutIndex).map((node) => node.id));
+  const descendantIds = descendantsOf(selected.id, layoutIndex);
 
   const emphasized = (id: string) =>
     traceMode === "all" ||
@@ -243,7 +255,7 @@ export function KnowledgeGraphCanvas({
           </g>
           <g className="nodes">
             {positioned.map((node) => {
-              const count = childrenMap.get(node.id)?.length ?? 0;
+              const count = activeChildrenMap.get(node.id)?.length ?? 0;
               const isFocus = node.id === focus.id;
               const isSelected = node.id === selected.id;
               const color = branchMeta[node.branch].color;

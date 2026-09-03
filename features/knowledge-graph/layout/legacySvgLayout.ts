@@ -1,8 +1,4 @@
-import {
-  getVisibleProjection,
-  knowledgeNodes,
-  type KnowledgeNode,
-} from "../model/knowledgeViewModel";
+import { knowledgeNodes, type KnowledgeNode } from "../model/knowledgeViewModel";
 
 export type Viewport = { x: number; y: number; scale: number };
 export type TraceMode = "context" | "upstream" | "downstream" | "all";
@@ -24,11 +20,27 @@ knowledgeNodes.forEach((node) => {
   childrenMap.set(node.parent, [...(childrenMap.get(node.parent) ?? []), node]);
 });
 
-export function ancestorsOf(id: string) {
+export type LayoutIndex = {
+  nodeMap: Map<string, KnowledgeNode>;
+  childrenMap: Map<string, KnowledgeNode[]>;
+};
+
+export function createLayoutIndex(nodes: readonly KnowledgeNode[]): LayoutIndex {
+  const nextNodeMap = new Map(nodes.map((node) => [node.id, node]));
+  const nextChildrenMap = new Map<string, KnowledgeNode[]>();
+  for (const node of nodes) {
+    if (node.parent) nextChildrenMap.set(node.parent, [...(nextChildrenMap.get(node.parent) ?? []), node]);
+  }
+  return { nodeMap: nextNodeMap, childrenMap: nextChildrenMap };
+}
+
+const defaultIndex: LayoutIndex = { nodeMap, childrenMap };
+
+export function ancestorsOf(id: string, index: LayoutIndex = defaultIndex) {
   const result: KnowledgeNode[] = [];
-  let current = nodeMap.get(id);
+  let current = index.nodeMap.get(id);
   while (current?.parent) {
-    const parent = nodeMap.get(current.parent);
+    const parent = index.nodeMap.get(current.parent);
     if (!parent) break;
     result.push(parent);
     current = parent;
@@ -36,12 +48,12 @@ export function ancestorsOf(id: string) {
   return result;
 }
 
-export function descendantsOf(id: string) {
+export function descendantsOf(id: string, index: LayoutIndex = defaultIndex) {
   const result = new Set<string>();
   const queue = [id];
   while (queue.length) {
     const current = queue.shift()!;
-    (childrenMap.get(current) ?? []).forEach((node) => {
+    (index.childrenMap.get(current) ?? []).forEach((node) => {
       if (!result.has(node.id)) {
         result.add(node.id);
         queue.push(node.id);
@@ -51,41 +63,47 @@ export function descendantsOf(id: string) {
   return result;
 }
 
-export function arrange(focus: KnowledgeNode): PositionedNode[] {
-  const projection = getVisibleProjection(focus.id);
-  const projectedNext = projection.next
-    .map((node) => nodeMap.get(node.id))
-    .filter((node): node is KnowledgeNode => Boolean(node));
-  const children = projectedNext.length ? projectedNext : childrenMap.get(focus.id) ?? [];
-  const ancestors = ancestorsOf(focus.id);
-  const centerY = WORLD.height / 2 - NODE_H / 2;
+export function arrange(focus: KnowledgeNode, index: LayoutIndex = defaultIndex): PositionedNode[] {
+  const lineage = [...ancestorsOf(focus.id, index).reverse(), focus];
+  const focusChildren = index.childrenMap.get(focus.id) ?? [];
+  /**
+   * A column represents exactly one primary-tree depth.  The focus lineage
+   * supplies the column's parent context; the column itself shows that
+   * context node together with its true siblings.  Only direct children of
+   * the focus may be appended as the next column.  Semantic links never
+   * participate in this placement calculation.
+   */
+  const columns: KnowledgeNode[][] = lineage.map((node) =>
+    node.parent ? (index.childrenMap.get(node.parent) ?? [node]) : [node],
+  );
+  if (focusChildren.length) columns.push(focusChildren);
+
+  // Keep the most relevant four depths when a deep node is opened.  Columns
+  // are still level-pure; no ancestor sibling can leak into a child column.
+  const visibleColumns = columns.slice(-4);
+  const gutter = 22;
+  const availableWidth = WORLD.width - NODE_W;
+  const columnGap = visibleColumns.length > 1
+    ? Math.min(NODE_W + gutter, availableWidth / (visibleColumns.length - 1))
+    : 0;
+  const contentWidth = NODE_W + columnGap * Math.max(0, visibleColumns.length - 1);
+  const firstX = Math.max(24, (WORLD.width - contentWidth) / 2);
   const result: PositionedNode[] = [];
 
-  if (children.length) {
-    if (ancestors[0]) {
-      result.push({ ...ancestors[0], x: 48, y: centerY, role: "previous" });
-    }
-    const focusX = ancestors[0] ? 374 : 92;
-    const childX = ancestors[0] ? 744 : 500;
-    result.push({ ...focus, x: focusX, y: centerY, role: "focus" });
-    const gap = Math.min(82, 550 / Math.max(1, children.length - 1));
-    const start = centerY - ((children.length - 1) * gap) / 2;
-    children.forEach((node, index) => {
-      result.push({ ...node, x: childX, y: start + index * gap, role: "next" });
-    });
-  } else {
-    const trail = [...ancestors].reverse().slice(-2);
-    const columns = trail.length === 2 ? [48, 374, 744] : trail.length === 1 ? [210, 590] : [424];
-    [...trail, focus].forEach((node, index) => {
+  visibleColumns.forEach((column, columnIndex) => {
+    const sorted = [...column].sort((left, right) => left.id === focus.id ? -1 : right.id === focus.id ? 1 : left.title.localeCompare(right.title, "zh-CN"));
+    const gap = Math.min(82, 560 / Math.max(1, sorted.length - 1));
+    const startY = WORLD.height / 2 - NODE_H / 2 - ((sorted.length - 1) * gap) / 2;
+    const x = firstX + columnIndex * columnGap;
+    sorted.forEach((node, rowIndex) => {
       result.push({
         ...node,
-        x: columns[index],
-        y: centerY,
-        role: index === trail.length ? "focus" : "previous",
+        x,
+        y: startY + rowIndex * gap,
+        role: node.id === focus.id ? "focus" : columnIndex === visibleColumns.length - 1 && focusChildren.some((child) => child.id === node.id) ? "next" : "previous",
       });
     });
-  }
-
+  });
   return result;
 }
 

@@ -1,4 +1,13 @@
-import type { EdgeType } from "../knowledge/schema";
+import type {
+  CardBlock,
+  EdgeType,
+  KnowledgeAsset,
+  KnowledgeEvidence,
+  KnowledgeFormula,
+  KnowledgeHistoryEntry,
+  SemanticDomain,
+} from "../knowledge/schema";
+import type { ExtractedKnowledgeClaim, SourceArtifact } from "../ingestion/contracts";
 
 export type Revision = number;
 
@@ -8,6 +17,15 @@ export interface AgentNodeRecord {
   canonicalName?: string;
   parentId?: string | null;
   primaryParentId?: string | null;
+  shortFact?: string;
+  aliases?: readonly string[];
+  nodeType?: string;
+  domainId?: string;
+  visualBranch?: string;
+  level?: number;
+  order?: number;
+  tags?: readonly string[];
+  status?: string;
 }
 
 export interface AgentEdgeRecord {
@@ -22,12 +40,25 @@ export interface AgentEdgeRecord {
 export interface AgentCardRecord {
   nodeId: string;
   headline?: string;
+  blocks?: readonly CardBlock[];
+  formulaIds?: readonly string[];
+  evidenceIds?: readonly string[];
+  revision?: number;
+  /** Compatibility field accepted from early offline fixtures. */
+  definition?: string;
 }
 
 export interface AgentGraphData {
   nodes: readonly AgentNodeRecord[];
   edges: readonly AgentEdgeRecord[];
   cards: readonly AgentCardRecord[];
+  domains?: readonly SemanticDomain[];
+  formulas?: readonly KnowledgeFormula[];
+  history?: readonly KnowledgeHistoryEntry[];
+  evidence?: readonly KnowledgeEvidence[];
+  assets?: readonly KnowledgeAsset[];
+  sources?: readonly SourceArtifact[];
+  claims?: readonly ExtractedKnowledgeClaim[];
 }
 
 export interface AgentGraphSnapshot extends AgentGraphData {
@@ -55,7 +86,16 @@ export type GraphOperation =
   | { readonly kind: "upsert-edge"; readonly edge: AgentEdgeRecord }
   | { readonly kind: "remove-edge"; readonly edgeId: string }
   | { readonly kind: "upsert-card"; readonly card: AgentCardRecord }
-  | { readonly kind: "remove-card"; readonly nodeId: string };
+  | { readonly kind: "remove-card"; readonly nodeId: string }
+  | { readonly kind: "upsert-formula"; readonly formula: KnowledgeFormula }
+  | { readonly kind: "remove-formula"; readonly formulaId: string }
+  | { readonly kind: "upsert-evidence"; readonly evidence: KnowledgeEvidence }
+  | { readonly kind: "remove-evidence"; readonly evidenceId: string }
+  | { readonly kind: "upsert-asset"; readonly asset: KnowledgeAsset }
+  | { readonly kind: "remove-asset"; readonly assetId: string }
+  | { readonly kind: "upsert-source"; readonly source: SourceArtifact }
+  | { readonly kind: "upsert-claim"; readonly claim: ExtractedKnowledgeClaim }
+  | { readonly kind: "append-history"; readonly entry: KnowledgeHistoryEntry };
 
 export interface KnowledgeProposal {
   id: string;
@@ -92,6 +132,12 @@ export interface ProjectionDiff {
   nodes: EntityDiff;
   edges: EntityDiff;
   cards: EntityDiff;
+  formulas: EntityDiff;
+  evidence: EntityDiff;
+  assets: EntityDiff;
+  sources: EntityDiff;
+  claims: EntityDiff;
+  history: EntityDiff;
   /** Ordered, bounded candidates for a future SVG projection. */
   visibleNodeIds: readonly string[];
 }
@@ -117,7 +163,7 @@ export interface GraphPatch {
 export interface DevelopmentPreview {
   patchId: string;
   currentNodeId?: string;
-  mode: "offline";
+  mode: "offline" | "online";
   status: "awaiting-confirmation";
   projectionDiff: ProjectionDiff;
   preparedAt: string;

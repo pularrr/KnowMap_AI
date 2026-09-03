@@ -5,7 +5,7 @@ import {
   type KnowledgeNode as LegacyKnowledgeNode,
 } from "../../../app/knowledge";
 import { projectVisibleGraph } from "../../../core/knowledge/traversal";
-import type { CardBlock, EdgeType } from "../../../core/knowledge/schema";
+import type { CardBlock, EdgeType, KnowledgeDataset } from "../../../core/knowledge/schema";
 import { expandedKnowledgeDataset } from "../../../data/knowledge/deep-slices";
 
 export { branchMeta };
@@ -16,6 +16,8 @@ export type KnowledgeCardSection = {
   title: string;
   text?: string;
   items?: string[];
+  language?: CardBlock["language"];
+  code?: string;
 };
 
 export type KnowledgeCardView = {
@@ -23,18 +25,12 @@ export type KnowledgeCardView = {
   sections: KnowledgeCardSection[];
 };
 
-const cardByNode = new Map(expandedKnowledgeDataset.cards.map((card) => [card.nodeId, card]));
-const formulasByNode = new Map<string, typeof expandedKnowledgeDataset.formulas>();
-
-for (const formula of expandedKnowledgeDataset.formulas) {
-  formulasByNode.set(formula.nodeId, [...(formulasByNode.get(formula.nodeId) ?? []), formula]);
-}
-
-export const knowledgeNodes: LegacyKnowledgeNode[] = expandedKnowledgeDataset.nodes
-  .slice()
-  .sort((left, right) => left.order - right.order)
-  .map((node) => {
-    const card = cardByNode.get(node.id);
+export function toLegacyKnowledgeNodes(dataset: KnowledgeDataset): LegacyKnowledgeNode[] {
+  const cards = new Map(dataset.cards.map((card) => [card.nodeId, card]));
+  const formulasByNode = new Map<string, KnowledgeDataset["formulas"]>();
+  for (const formula of dataset.formulas) formulasByNode.set(formula.nodeId, [...(formulasByNode.get(formula.nodeId) ?? []), formula]);
+  return dataset.nodes.slice().sort((left, right) => left.order - right.order).map((node) => {
+    const card = cards.get(node.id);
     const blocks = card?.blocks ?? [];
     const formulas = formulasByNode.get(node.id) ?? [];
     const first = (type: CardBlock["type"]) => blocks.find((block) => block.type === type);
@@ -47,13 +43,21 @@ export const knowledgeNodes: LegacyKnowledgeNode[] = expandedKnowledgeDataset.no
       summary: card?.headline ?? node.legacySnapshot?.summary ?? node.shortFact,
       ...(first("principle")?.items ? { details: first("principle")!.items } : {}),
       ...(formulas[0] ? { formula: formulas[0].sourceText } : {}),
-      ...(first("engineering_tradeoff")?.text
-        ? { impact: first("engineering_tradeoff")!.text }
-        : {}),
+      ...(first("engineering_tradeoff")?.text ? { impact: first("engineering_tradeoff")!.text } : {}),
       ...(first("validation")?.text ? { verification: first("validation")!.text } : {}),
       ...(first("failure_mode")?.text ? { pitfall: first("failure_mode")!.text } : {}),
     };
   });
+}
+
+const cardByNode = new Map(expandedKnowledgeDataset.cards.map((card) => [card.nodeId, card]));
+const formulasByNode = new Map<string, typeof expandedKnowledgeDataset.formulas>();
+
+for (const formula of expandedKnowledgeDataset.formulas) {
+  formulasByNode.set(formula.nodeId, [...(formulasByNode.get(formula.nodeId) ?? []), formula]);
+}
+
+export const knowledgeNodes: LegacyKnowledgeNode[] = toLegacyKnowledgeNodes(expandedKnowledgeDataset);
 
 export const formulaMeta: Record<string, FormulaMeta> = Object.fromEntries(
   expandedKnowledgeDataset.formulas.map((formula) => [
@@ -80,6 +84,24 @@ export function getKnowledgeCard(nodeId: string): KnowledgeCardView | undefined 
       title: block.title,
       ...(block.text ? { text: block.text } : {}),
       ...(block.items?.length ? { items: [...block.items] } : {}),
+      ...(block.language ? { language: block.language } : {}),
+      ...(block.code ? { code: block.code } : {}),
+    })),
+  };
+}
+
+export function getKnowledgeCardFromDataset(dataset: KnowledgeDataset, nodeId: string): KnowledgeCardView | undefined {
+  const card = dataset.cards.find((item) => item.nodeId === nodeId);
+  if (!card) return undefined;
+  return {
+    headline: card.headline,
+    sections: card.blocks.map((block) => ({
+      type: block.type,
+      title: block.title,
+      ...(block.text ? { text: block.text } : {}),
+      ...(block.items?.length ? { items: [...block.items] } : {}),
+      ...(block.language ? { language: block.language } : {}),
+      ...(block.code ? { code: block.code } : {}),
     })),
   };
 }
@@ -102,6 +124,16 @@ export function getVisibleProjection(anchorId: string, maxNodes = 8) {
 
 export function getVisibleRelations(anchorId: string, maxNodes = 8): VisibleRelation[] {
   return getVisibleProjection(anchorId, maxNodes).edges.map((edge) => ({
+    id: edge.id,
+    from: edge.sourceId,
+    to: edge.targetId,
+    type: edge.type,
+    label: edge.rationale,
+  }));
+}
+
+export function getVisibleRelationsFromDataset(dataset: KnowledgeDataset, anchorId: string, maxNodes = 8): VisibleRelation[] {
+  return projectVisibleGraph(dataset, anchorId, { maxDepth: 1, maxNodes, includeImplicitSiblings: true }).edges.map((edge) => ({
     id: edge.id,
     from: edge.sourceId,
     to: edge.targetId,

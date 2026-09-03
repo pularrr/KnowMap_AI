@@ -42,6 +42,7 @@ export class OfflineAgentWorkflow {
 
   snapshot() { return this.store.snapshot(); }
   revisionHistory() { return this.store.revisionHistory(); }
+  rollbackTargets() { return this.store.rollbackTargets(); }
   auditLog(): readonly AuditEvent[] { return structuredClone(this.events); }
 
   submit(context: ConversationContext): WorkflowCandidate {

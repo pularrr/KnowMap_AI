@@ -104,6 +104,71 @@ export interface KnowledgeCard {
   revision: number;
 }
 
+export type KnowledgeCollectionKind = "theory" | "application" | "other";
+
+export type KnowledgeHistoryKind =
+  | "initialized"
+  | "question_summary"
+  | "candidate_generated"
+  | "knowledge_imported"
+  | "revision_applied"
+  | "rollback";
+
+export interface KnowledgeHistoryEntry {
+  id: string;
+  nodeId: string;
+  kind: KnowledgeHistoryKind;
+  summary: string;
+  occurredAt: string;
+  revision?: number;
+  sourceArtifactId?: string;
+}
+
+export type KnowledgeAssetModality = "text" | "image" | "audio" | "video" | "document";
+
+export interface KnowledgeAsset {
+  id: string;
+  modality: KnowledgeAssetModality;
+  mimeType: string;
+  storageRef: string;
+  checksum: string;
+  title?: string;
+}
+
+export interface KnowledgeEvidence {
+  id: string;
+  title: string;
+  sourceType: "conversation" | "summary" | "paper" | "document" | "image" | "audio" | "video" | "manual";
+  locator?: string;
+  excerpt?: string;
+  assetId?: string;
+}
+
+export type KnowledgeSourceKind = "conversation" | "summary" | "paper" | "document" | "image" | "audio" | "video";
+
+export interface KnowledgeSourceArtifact {
+  id: string;
+  title: string;
+  kind: KnowledgeSourceKind;
+  modality: KnowledgeAssetModality;
+  mimeType: string;
+  checksum: string;
+  storageRef?: string;
+  suppliedAt: string;
+  suppliedBy: string;
+}
+
+export interface KnowledgeClaim {
+  id: string;
+  artifactId: string;
+  segmentIds: readonly string[];
+  statement: string;
+  shortSummary: string;
+  suggestedCollection: KnowledgeCollectionKind;
+  nodeHint?: string;
+  confidence: number;
+}
+
 export interface FormulaSymbol {
   symbol: string;
   latex: string;
@@ -144,6 +209,12 @@ export interface KnowledgeDataset {
   cards: KnowledgeCard[];
   formulas: KnowledgeFormula[];
   edges: KnowledgeEdge[];
+  /** Human-facing audit summaries. Retrieval excludes these unless explicitly requested. */
+  history?: KnowledgeHistoryEntry[];
+  evidence?: KnowledgeEvidence[];
+  assets?: KnowledgeAsset[];
+  sources?: KnowledgeSourceArtifact[];
+  claims?: KnowledgeClaim[];
 }
 
 export interface LegacyKnowledgeNode {

@@ -3,10 +3,11 @@ import type {
   KnowledgeDataset,
   KnowledgeEdge,
   KnowledgeFormula,
+  KnowledgeHistoryEntry,
   KnowledgeNode,
   SemanticDomain,
 } from "@/core/knowledge/schema";
-import type { KnowledgeRepository } from "./knowledge-repository";
+import type { HistoryRetrievalPolicy, KnowledgeRepository } from "./knowledge-repository";
 
 const byPlacement = (a: KnowledgeNode, b: KnowledgeNode) =>
   a.order - b.order || a.id.localeCompare(b.id);
@@ -40,6 +41,11 @@ function cloneDataset(dataset: KnowledgeDataset): KnowledgeDataset {
       symbols: formula.symbols.map((symbol) => ({ ...symbol })),
     })),
     edges: dataset.edges.map((edge) => ({ ...edge, evidenceIds: [...edge.evidenceIds] })),
+    history: dataset.history?.map((entry) => ({ ...entry })),
+    evidence: dataset.evidence?.map((entry) => ({ ...entry })),
+    assets: dataset.assets?.map((asset) => ({ ...asset })),
+    sources: dataset.sources?.map((source) => ({ ...source })),
+    claims: dataset.claims?.map((claim) => ({ ...claim, segmentIds: [...claim.segmentIds] })),
   };
 }
 
@@ -92,5 +98,13 @@ export class StaticKnowledgeRepository implements KnowledgeRepository {
       ? this.dataset.edges.filter((edge) => edge.sourceId === nodeId || edge.targetId === nodeId)
       : this.dataset.edges;
     return edges.map((edge) => ({ ...edge, evidenceIds: [...edge.evidenceIds] }));
+  }
+  getHistory(nodeId: string, policy?: HistoryRetrievalPolicy): KnowledgeHistoryEntry[] {
+    if (!policy?.includeHistory || policy.historyIds.length === 0) return [];
+    const ids = new Set(policy.historyIds);
+    return (this.dataset.history ?? [])
+      .filter((entry) => entry.nodeId === nodeId && ids.has(entry.id))
+      .slice(0, 15)
+      .map((entry) => ({ ...entry }));
   }
 }

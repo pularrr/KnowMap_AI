@@ -18,6 +18,12 @@ export function applyOperations(
   const nodes = new Map(snapshot.nodes.map((node) => [node.id, clone(node)]));
   const edges = new Map(snapshot.edges.map((edge) => [edge.id, clone(edge)]));
   const cards = new Map(snapshot.cards.map((card) => [card.nodeId, clone(card)]));
+  const formulas = new Map((snapshot.formulas ?? []).map((formula) => [formula.id, clone(formula)]));
+  const evidence = new Map((snapshot.evidence ?? []).map((item) => [item.id, clone(item)]));
+  const assets = new Map((snapshot.assets ?? []).map((asset) => [asset.id, clone(asset)]));
+  const sources = new Map((snapshot.sources ?? []).map((source) => [source.id, clone(source)]));
+  const claims = new Map((snapshot.claims ?? []).map((claim) => [claim.id, clone(claim)]));
+  const history = new Map((snapshot.history ?? []).map((entry) => [entry.id, clone(entry)]));
 
   for (const operation of operations) {
     switch (operation.kind) {
@@ -27,14 +33,30 @@ export function applyOperations(
       case "remove-edge": edges.delete(operation.edgeId); break;
       case "upsert-card": cards.set(operation.card.nodeId, clone(operation.card)); break;
       case "remove-card": cards.delete(operation.nodeId); break;
+      case "upsert-formula": formulas.set(operation.formula.id, clone(operation.formula)); break;
+      case "remove-formula": formulas.delete(operation.formulaId); break;
+      case "upsert-evidence": evidence.set(operation.evidence.id, clone(operation.evidence)); break;
+      case "remove-evidence": evidence.delete(operation.evidenceId); break;
+      case "upsert-asset": assets.set(operation.asset.id, clone(operation.asset)); break;
+      case "remove-asset": assets.delete(operation.assetId); break;
+      case "upsert-source": sources.set(operation.source.id, clone(operation.source)); break;
+      case "upsert-claim": claims.set(operation.claim.id, clone(operation.claim)); break;
+      case "append-history": history.set(operation.entry.id, clone(operation.entry)); break;
     }
   }
 
   return {
+    ...clone(snapshot),
     revision: nextRevision,
     nodes: [...nodes.values()] as AgentNodeRecord[],
     edges: [...edges.values()] as AgentEdgeRecord[],
     cards: [...cards.values()] as AgentCardRecord[],
+    formulas: [...formulas.values()],
+    evidence: [...evidence.values()],
+    assets: [...assets.values()],
+    sources: [...sources.values()],
+    claims: [...claims.values()],
+    history: [...history.values()],
   };
 }
 
@@ -79,6 +101,12 @@ export function createProjectionDiff(
   const nodes = diffRecords(before.nodes, after.nodes, (node) => node.id);
   const edges = diffRecords(before.edges, after.edges, (edge) => edge.id);
   const cards = diffRecords(before.cards, after.cards, (card) => card.nodeId);
+  const formulas = diffRecords(before.formulas ?? [], after.formulas ?? [], (formula) => formula.id);
+  const evidence = diffRecords(before.evidence ?? [], after.evidence ?? [], (item) => item.id);
+  const assets = diffRecords(before.assets ?? [], after.assets ?? [], (asset) => asset.id);
+  const sources = diffRecords(before.sources ?? [], after.sources ?? [], (source) => source.id);
+  const claims = diffRecords(before.claims ?? [], after.claims ?? [], (claim) => claim.id);
+  const history = diffRecords(before.history ?? [], after.history ?? [], (entry) => entry.id);
   const changedNodes = [...nodes.added, ...nodes.updated];
   const edgeMap = new Map(after.edges.map((edge) => [edge.id, edge]));
   const endpoints = [...edges.added, ...edges.updated]
@@ -91,5 +119,5 @@ export function createProjectionDiff(
     ...changedNodes,
     ...endpoints,
   ])].slice(0, 12);
-  return { nodes, edges, cards, visibleNodeIds };
+  return { nodes, edges, cards, formulas, evidence, assets, sources, claims, history, visibleNodeIds };
 }

@@ -91,4 +91,5 @@ test("StaticKnowledgeRepository returns defensive snapshots and stable children"
     repository.getChildren("estimators").map((node) => node.id),
     ["least-squares", "maximum-likelihood", "map-estimation", "mmse-estimation"],
   );
+  assert.deepEqual(repository.getHistory("fmcw"), []);
 });
