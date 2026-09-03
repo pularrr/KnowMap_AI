@@ -8,6 +8,7 @@ import { MarkdownMessage } from "./MarkdownMessage";
 
 type PanelMode = "collapsed" | "compact" | "overlay";
 type MessageRole = "user" | "assistant";
+type IngestKind = "conversation" | "summary" | "paper" | "document";
 type Message = {
   id: string;
   role: MessageRole;
@@ -44,6 +45,7 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [ingestKind, setIngestKind] = useState<IngestKind>("document");
   const threadRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -143,7 +145,7 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
     setMessages((current) => [...current, { id: pendingId, role: "assistant", label, text: "", streaming: true }]);
     try {
       const path = kind === "ingest" ? "/api/knowledge/ingest" : "/api/agent/deep-search";
-      const result = await request(path, { sessionId, nodeId: selected.id, query: userText || query, text: userText, kind: "document", title: "对话与资料整理" });
+      const result = await request(path, { sessionId, nodeId: selected.id, query: userText || query, text: userText, kind: kind === "ingest" ? ingestKind : undefined, title: kind === "ingest" ? `资料整理（${ingestKind}）` : undefined });
       const finalLabel = kind === "ingest" ? "资料整理" : result.mode === "online" ? "深度搜索" : "离线覆盖检查";
       setMessages((current) => current.map((item) => (item.id === pendingId ? { ...item, label: finalLabel, text: result.text, streaming: false, result } : item)));
       appendKnowledgeHistory({ nodeId: selected.id, kind: result.candidate ? "candidate_generated" : "question_summary", summary: result.candidate?.summary ?? result.text });
@@ -203,7 +205,7 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
         </div>
       </header>
       {mode !== "collapsed" ? <div className="graph-agent-body">
-        <form className="agent-query" onSubmit={ask}><label htmlFor="agent-query">围绕当前节点提问</label><div><textarea id="agent-query" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder={`询问“${selected.title}”，Enter 发送，Shift+Enter 换行`} /><button type="submit" disabled={busy || !query.trim()} aria-label="发送问题">↑</button></div>{busy ? <small className="agent-busy-hint">回答生成中，可稍候…</small> : null}</form>
+        <form className="agent-query" onSubmit={ask}><label htmlFor="agent-query">围绕当前节点提问</label><div><textarea id="agent-query" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder={`询问“${selected.title}”，Enter 发送，Shift+Enter 换行；或粘贴资料后点“整理资料”`} /><button type="submit" disabled={busy || !query.trim()} aria-label="发送问题">↑</button></div><div className="ingest-kind-bar"><span>资料类型：</span><select value={ingestKind} onChange={(e) => setIngestKind(e.target.value as IngestKind)} disabled={busy} aria-label="选择资料类型"><option value="document">文档</option><option value="conversation">对话记录</option><option value="summary">知识摘要</option><option value="paper">文献/技术方案</option></select></div>{busy ? <small className="agent-busy-hint">回答生成中，可稍候…</small> : null}</form>
         <div className="agent-thread" ref={threadRef} aria-live="polite">
           {messages.length ? messages.map((message) => (
             <article key={message.id} className={`agent-message ${message.role}${message.result?.candidate ? " knowledge_candidate" : ""}${message.streaming ? " streaming" : ""}`}>
