@@ -84,7 +84,7 @@ export class LlmServerConfig {
     this.maxOutputTokens = readInteger(
       environment.LLM_MAX_OUTPUT_TOKENS,
       "LLM_MAX_OUTPUT_TOKENS",
-      4_096,
+      16_384,
       1,
       131_072,
     );

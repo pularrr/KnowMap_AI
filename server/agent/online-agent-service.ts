@@ -57,6 +57,43 @@ const allowedNodeTypes = new Set<NodeType>(["domain", "problem", "concept", "met
 
 const now = () => new Date().toISOString();
 const clean = (value: unknown, limit = 2_000): string => typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, limit) : "";
+const sleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
+/**
+ * SSE event contract used by the streaming chat route. The frontend consumes
+ * these to reproduce a general LLM web experience (user bubble → thinking →
+ * streaming markdown answer).
+ */
+export type AnswerStreamEvent =
+  | { type: "meta"; runId: string; mode: "online" | "offline"; provider?: string; model?: string }
+  | { type: "delta"; text: string }
+  | { type: "done"; result: AgentInteractionResult }
+  | { type: "error"; message: string };
+
+const ANSWER_INSTRUCTIONS = `你是 FMCW 雷达领域知识助手。请围绕用户的问题直接作答，给出准确、完整、结构清晰的回答。回答应主要基于问题本身与你的领域知识：下面提供的“知识领域”只用于说明用户当前所处领域与关注点，不是唯一依据，也不要逐字复述图谱原始数据。
+请使用 Markdown 组织回答：可用标题、无序/有序列表、加粗、行内代码、代码块、表格；涉及公式可用行内公式或代码块表达。回答要充实完整，尽量覆盖问题的关键方面、原理、工程取舍与常见误区；若数据或结论存在不确定性、缺少依据，请明确说明。不要声称修改了图谱。
+禁止生成 Markdown 图片语法（![...](...)）、图表或任何需要外部图片资源的内容；如需说明结构，请用文字、列表或表格描述。`;
+
+/** Builds a compact "knowledge domain" reference — not a document dump. */
+function knowledgeDomainContext(dataset: KnowledgeDataset, nodeId: string): string {
+  const node = dataset.nodes.find((item) => item.id === nodeId);
+  if (!node) throw new Error(`Unknown node: ${nodeId}`);
+  const domain = dataset.domains.find((item) => item.id === node.domainId);
+  const related = dataset.nodes
+    .filter((item) => item.primaryParentId === node.id || node.primaryParentId === item.id)
+    .slice(0, 12)
+    .map((item) => item.canonicalName);
+  return [
+    `当前关注节点：${node.canonicalName}（${node.nodeType}）`,
+    domain ? `所属语义域：${domain.name} — ${domain.description}` : "",
+    `领域简介：${node.shortFact}`,
+    related.length ? `相关节点：${related.join("、")}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function answerPrompt(dataset: KnowledgeDataset, nodeId: string, query: string): string {
+  return `${query}\n\n【知识领域（仅作背景参考）】\n${knowledgeDomainContext(dataset, nodeId)}`;
+}
 
 function parseJsonDocument(text: string): ResearchDocument | undefined {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
@@ -69,19 +106,20 @@ function graphSnapshot(dataset: KnowledgeDataset): AgentGraphSnapshot {
   return { ...datasetToAgentGraph(dataset), revision: dataset.revision };
 }
 
-function nodeContext(dataset: KnowledgeDataset, nodeId: string): string {
-  const node = dataset.nodes.find((item) => item.id === nodeId);
-  if (!node) throw new Error(`Unknown node: ${nodeId}`);
-  const card = dataset.cards.find((item) => item.nodeId === nodeId);
-  return JSON.stringify({ node, card });
-}
-
 function offlineAnswer(dataset: KnowledgeDataset, nodeId: string, query: string): string {
   const node = dataset.nodes.find((item) => item.id === nodeId);
   if (!node) throw new Error(`Unknown node: ${nodeId}`);
   const card = dataset.cards.find((item) => item.nodeId === nodeId);
-  const material = card?.blocks.slice(0, 3).map((block) => block.text || block.items?.join("；")).filter(Boolean).join("；");
-  return material ? `${node.canonicalName}：${material}` : `${node.canonicalName}：${node.shortFact}。当前离线知识不足以完整回答“${clean(query, 120)}”。`;
+  const blocks = card?.blocks.slice(0, 6) ?? [];
+  const head = `**${node.canonicalName}**\n\n${node.shortFact}`;
+  if (!blocks.length) {
+    return `${head}\n\n> 当前离线知识不足，无法完整回答“${clean(query, 120)}”。配置外部 LLM 后可以获得更完整的回答。`;
+  }
+  const sections = blocks.map((block) => {
+    const body = block.text || block.items?.join("；") || block.code || "";
+    return body ? `### ${block.title}\n\n${body}` : "";
+  }).filter(Boolean).join("\n\n");
+  return `${head}\n\n${sections}\n\n> 以上内容来自本地离线知识卡。未配置外部 LLM，回答基于图谱卡片整理。`;
 }
 
 function appendBlock(card: KnowledgeCard, block: CardBlock): KnowledgeCard {
@@ -119,14 +157,20 @@ function operationsFromResearch(document: ResearchDocument, dataset: KnowledgeDa
     operations.push(...staged.claims.slice(0, 24).map((claim): GraphOperation => ({ kind: "upsert-claim", claim })));
   }
   const cardByNode = new Map(dataset.cards.map((card) => [card.nodeId, card]));
-
-  for (const suggestion of (proposal.cardBlocks ?? []).slice(0, 2)) {
+  const cardBlocksByNode = new Map<string, CardBlock[]>();
+  for (const suggestion of (proposal.cardBlocks ?? []).slice(0, 4)) {
     const nodeId = suggestion.nodeId && dataset.nodes.some((item) => item.id === suggestion.nodeId) ? suggestion.nodeId : currentNodeId;
     const type = allowedBlockTypes.has(suggestion.type as CardBlockType) ? suggestion.type as CardBlockType : "research_topic";
     const text = clean(suggestion.text, 2_400);
     if (!text) continue;
+    const block: CardBlock = { type, title: clean(suggestion.title, 80) || CARD_SECTION_CATALOG.find((item) => item.type === type)!.label, text };
+    const existing = cardBlocksByNode.get(nodeId) ?? [];
+    cardBlocksByNode.set(nodeId, [...existing, block]);
+  }
+  for (const [nodeId, blocks] of cardBlocksByNode) {
     const existing = cardByNode.get(nodeId) ?? { nodeId, headline: dataset.nodes.find((item) => item.id === nodeId)?.shortFact ?? "知识卡片", blocks: [], formulaIds: [], evidenceIds: [], revision: dataset.revision };
-    const card = appendBlock(existing, { type, title: clean(suggestion.title, 80) || CARD_SECTION_CATALOG.find((item) => item.type === type)!.label, text });
+    let card = existing;
+    for (const block of blocks) card = appendBlock(card, block);
     card.evidenceIds = [...new Set([...card.evidenceIds, ...evidenceIds])];
     operations.push({ kind: "upsert-card", card });
   }
@@ -188,7 +232,7 @@ async function semanticReview(
   const response = await provider.createResponse({
     instructions: "你是独立 Review Agent。检查新主张与现有图谱是否冲突、taxonomy 是否合适、是否重复建点、主父级与关系方向是否正确。只输出 JSON：{\"accepted\":boolean,\"findings\":[{\"code\":string,\"severity\":\"error\"|\"warning\",\"message\":string,\"operationIndex\":number|null}]}。不要输出思维过程。",
     messages: [{ role: "user", content: JSON.stringify({ proposal, nearbyNodes: dataset.nodes.slice(0, 140) }) }],
-    maxOutputTokens: 1_500,
+    maxOutputTokens: 4_096,
   });
   const parsed = parseJsonDocument(response.text) as { accepted?: boolean; findings?: ReviewFinding[] } | undefined;
   if (!parsed || typeof parsed.accepted !== "boolean" || !Array.isArray(parsed.findings)) {
@@ -225,13 +269,67 @@ export class OnlineAgentService {
     await repository.putRun(run);
     const provider = createConfiguredLlmProvider({ environment: runtimeLlmConfigStore().environment() });
     const response = await provider.createResponse({
-      instructions: "你是 FMCW 雷达知识助手。优先依据给定图谱上下文回答；指出不确定性；不要声称修改了图谱。用中文简洁回答。",
-      messages: [{ role: "user", content: `${input.query}\n\n图谱上下文：${nodeContext(dataset, input.nodeId)}` }],
-      maxOutputTokens: 1_800,
+      instructions: ANSWER_INSTRUCTIONS,
+      messages: [{ role: "user", content: answerPrompt(dataset, input.nodeId, input.query) }],
     });
     run = transitionAgentRun(run, "applied", { actor: "development-agent", summary: "在线回答完成", at: now() });
     await repository.putRun(run);
     return { runId, mode: "online", provider: response.provider, model: response.model, text: response.text, observations: [] };
+  }
+
+  /** Streaming variant of {@link answer} consumed by the SSE chat route. */
+  async *answerStream(input: { sessionId: string; nodeId: string; query: string }): AsyncIterable<AnswerStreamEvent> {
+    const repository = runtimeKnowledgeRepository();
+    const dataset = repository.snapshot();
+    const runId = randomUUID();
+    let run = createAgentRun({ id: runId, sessionId: input.sessionId, kind: "chat", baseRevision: dataset.revision, currentNodeId: input.nodeId, querySummary: clean(input.query, 120), at: now() });
+    if (!runtimeLlmConfigStore().status().configured) {
+      yield { type: "meta", runId, mode: "offline" };
+      run = transitionAgentRun(run, "answering", { actor: "knowledge-agent", summary: "使用离线知识卡回答", at: now() });
+      await repository.putRun(run);
+      await sleep(650);
+      const text = offlineAnswer(dataset, input.nodeId, input.query);
+      run = transitionAgentRun(run, "applied", { actor: "development-agent", summary: "离线回答完成", at: now() });
+      await repository.putRun(run);
+      yield { type: "done", result: { runId, mode: "offline", text, observations: [], warning: "未配置外部 LLM，已使用离线知识卡回答。" } };
+      return;
+    }
+    run = transitionAgentRun(run, "answering", { actor: "knowledge-agent", summary: "调用外部通用 LLM 回答", at: now() });
+    await repository.putRun(run);
+    const provider = createConfiguredLlmProvider({ environment: runtimeLlmConfigStore().environment() });
+    const request = {
+      instructions: ANSWER_INSTRUCTIONS,
+      messages: [{ role: "user", content: answerPrompt(dataset, input.nodeId, input.query) }],
+    } as const;
+    yield { type: "meta", runId, mode: "online", provider: provider.name };
+    let fullText = "";
+    let model = "";
+    try {
+      if (provider.createStream) {
+        for await (const event of provider.createStream(request)) {
+          if (event.type === "text_delta") {
+            fullText += event.text;
+            yield { type: "delta", text: event.text };
+          } else if (event.type === "done") {
+            model = event.result.model;
+          } else if (event.type === "error") {
+            throw event.error;
+          }
+        }
+      } else {
+        const response = await provider.createResponse(request);
+        fullText = response.text;
+        model = response.model;
+        yield { type: "delta", text: fullText };
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "LLM 回答失败。";
+      yield { type: "error", message };
+      return;
+    }
+    run = transitionAgentRun(run, "applied", { actor: "development-agent", summary: "在线回答完成", at: now() });
+    await repository.putRun(run);
+    yield { type: "done", result: { runId, mode: "online", provider: provider.name, model, text: fullText, observations: [] } };
   }
 
   async deepSearch(input: { sessionId: string; nodeId: string; query: string; staged?: StagedKnowledgeImport }): Promise<AgentInteractionResult> {
@@ -281,7 +379,7 @@ export class OnlineAgentService {
         messages,
         tools: KNOWLEDGE_TOOL_DEFINITIONS,
         toolChoice: round === 0 ? "required" : "auto",
-        maxOutputTokens: 1_200,
+        maxOutputTokens: 4_096,
       });
       lastProvider = response.provider;
       lastModel = response.model;
@@ -309,7 +407,7 @@ export class OnlineAgentService {
       messages,
       tools: [{ type: "web_search" }],
       toolChoice: "required",
-      maxOutputTokens: 4_000,
+      maxOutputTokens: 8_192,
     });
     lastProvider = finalResponse.provider;
     lastModel = finalResponse.model;

@@ -11,6 +11,7 @@ import {
   type LlmResponseRequest,
   type LlmResponseResult,
   type LlmResponseStatus,
+  type LlmStreamEvent,
   type LlmUsage,
   type LlmTool,
 } from "../../core/llm/contracts";
@@ -39,6 +40,30 @@ const statusOf = (value: unknown): LlmResponseStatus => {
   if (value === "completed" || value === "incomplete" || value === "failed") return value;
   return "unknown";
 };
+
+/**
+ * Reasoning models (o1/o3/o4, gpt-5, deepseek-reasoner, r1, "thinking" family)
+ * reject the `tool_choice` parameter and often reject `parallel_tool_calls`.
+ * Matching by model name keeps normal chat models on the strictest behavior
+ * while letting reasoning models run without provider errors.
+ */
+const REASONING_MODEL_HINTS = [
+  /(^|[-_:./])(o[1-9]|o[1-9]-mini|o[1-9]-preview)([-_:./]|$)/i,
+  /(^|[-_:./])gpt-5([-_.]|$)/i,
+  /(^|[-_:./])(deepseek-reasoner|deepseek-r1|r1)([-_:./]|$)/i,
+  /reasoning/i,
+  /thinking/i,
+];
+
+export function isReasoningModel(model: string): boolean {
+  return REASONING_MODEL_HINTS.some((pattern) => pattern.test(model));
+}
+
+const TOOL_CHOICE_UNSUPPORTED = /tool[_ ]?choice|thinking mode does not support|does not support.*tool_choice|not supported.*tool_choice/i;
+
+function isToolChoiceError(error: unknown): boolean {
+  return error instanceof LlmHttpError && TOOL_CHOICE_UNSUPPORTED.test(error.message);
+}
 
 function parseArguments(rawArguments: string): Pick<LlmFunctionCall, "arguments" | "argumentParseError"> {
   try {
@@ -124,6 +149,65 @@ function toolPayload(tool: LlmTool): UnknownRecord {
   };
 }
 
+/**
+ * Builds the Responses API request body. Reasoning models cannot receive
+ * `tool_choice` or `parallel_tool_calls`, so both are stripped for them.
+ */
+function buildRequestBody(request: LlmResponseRequest, config: LlmServerConfig, stream: boolean): UnknownRecord {
+  const messages = request.messages ?? [];
+  const toolOutputs = request.toolOutputs ?? [];
+  const tools = request.tools ?? [];
+  const input: UnknownRecord[] = [
+    ...messages.map((message) => ({ role: message.role, content: message.content })),
+    ...toolOutputs.map((output) => ({
+      type: "function_call_output",
+      call_id: output.callId,
+      output: jsonOutput(output.output),
+    })),
+  ];
+  const reasoning = isReasoningModel(config.model);
+  const body: UnknownRecord = {
+    model: config.model,
+    input,
+    max_output_tokens: request.maxOutputTokens ?? config.maxOutputTokens,
+    store: false,
+    stream,
+    ...(request.instructions ? { instructions: request.instructions } : {}),
+    ...(tools.length ? { tools: tools.map(toolPayload) } : {}),
+    ...(request.toolChoice && !reasoning ? { tool_choice: request.toolChoice } : {}),
+    ...(request.parallelToolCalls !== undefined && !reasoning
+      ? { parallel_tool_calls: request.parallelToolCalls }
+      : {}),
+    ...(request.session?.previousResponseId
+      ? { previous_response_id: request.session.previousResponseId }
+      : {}),
+    ...(request.metadata ? { metadata: request.metadata } : {}),
+  };
+  return body;
+}
+
+/** Normalizes a completed Responses API payload into the provider result. */
+function parseResponsePayload(payload: unknown, config: LlmServerConfig, requestId?: string | null): LlmResponseResult {
+  if (!isRecord(payload)) throw new LlmRequestError("LLM provider returned an invalid response body.");
+  const id = optionalString(payload.id);
+  if (!id) throw new LlmRequestError("LLM provider response is missing an id.");
+  const incompleteDetails = isRecord(payload.incomplete_details) ? payload.incomplete_details : undefined;
+  return {
+    id,
+    provider: "openai-responses",
+    model: optionalString(payload.model) ?? config.model,
+    status: statusOf(payload.status),
+    text: parseText(payload),
+    toolCalls: parseToolCalls(payload.output),
+    ...(parseUsage(payload.usage) ? { usage: parseUsage(payload.usage) } : {}),
+    session: { previousResponseId: id },
+    ...(requestId ? { requestId } : {}),
+    ...(optionalString(incompleteDetails?.reason)
+      ? { incompleteReason: optionalString(incompleteDetails?.reason) }
+      : {}),
+  };
+}
+
 async function errorFromResponse(response: Response): Promise<LlmHttpError> {
   const requestId = response.headers.get("x-request-id") ?? undefined;
   let message = `LLM provider returned HTTP ${response.status}.`;
@@ -149,6 +233,84 @@ export class OpenAiResponsesProvider implements LlmProvider {
   ) {}
 
   async createResponse(request: LlmResponseRequest): Promise<LlmResponseResult> {
+    this.validate(request);
+    const runOnce = async (withToolChoice: boolean): Promise<LlmResponseResult> => {
+      const body = buildRequestBody({ ...request, toolChoice: withToolChoice ? request.toolChoice : undefined }, this.config, false);
+      const response = await this.post(body, request.signal);
+      if (!response.ok) throw await errorFromResponse(response);
+      return parseResponsePayload(await response.json(), this.config, response.headers.get("x-request-id"));
+    };
+    try {
+      return await runOnce(true);
+    } catch (error) {
+      // Reasoning models reject `tool_choice`; when the provider complains,
+      // retry once without it before surfacing the failure.
+      if (request.toolChoice && isToolChoiceError(error)) return runOnce(false);
+      throw error;
+    }
+  }
+
+  async *createStream(request: LlmResponseRequest): AsyncIterable<LlmStreamEvent> {
+    this.validate(request);
+    const runOnce = async (): Promise<Response> => {
+      const body = buildRequestBody(request, this.config, true);
+      return this.post(body, request.signal);
+    };
+    let response = await runOnce();
+    if (!response.ok) {
+      const error = await errorFromResponse(response);
+      // Some reasoning-model gateways reject the request until `tool_choice` is
+      // removed; retry the stream once without it.
+      if (request.toolChoice && isToolChoiceError(error)) {
+        const body = buildRequestBody({ ...request, toolChoice: undefined }, this.config, true);
+        response = await this.post(body, request.signal);
+        if (!response.ok) throw await errorFromResponse(response);
+      } else {
+        throw error;
+      }
+    }
+    const requestId = response.headers.get("x-request-id") ?? undefined;
+    if (!response.body) {
+      throw new LlmRequestError("LLM provider returned an empty streaming body.");
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
+        for (const block of events) {
+          const parsed = parseSseBlock(block);
+          if (!parsed) continue;
+          if (parsed.type === "response.output_text.delta" && typeof parsed.delta === "string") {
+            yield { type: "text_delta", text: parsed.delta };
+          } else if (parsed.type === "response.completed" && parsed.response !== undefined) {
+            try {
+              yield { type: "done", result: parseResponsePayload(parsed.response, this.config, requestId) };
+            } catch (error) {
+              yield { type: "error", error: error instanceof Error ? error : new LlmRequestError("Streamed response could not be parsed.") };
+            }
+            return;
+          } else if (parsed.type === "error" && isRecord(parsed.error)) {
+            const message = optionalString(parsed.error.message) ?? "LLM provider streamed an error.";
+            const code = optionalString(parsed.error.code);
+            throw new LlmHttpError(message, 400, requestId, code);
+          }
+        }
+      }
+      yield { type: "error", error: new LlmRequestError("LLM provider stream ended without a completed response.") };
+    } catch (error) {
+      yield { type: "error", error: error instanceof Error ? error : new LlmRequestError("LLM stream failed.") };
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  private validate(request: LlmResponseRequest): void {
     const messages = request.messages ?? [];
     const toolOutputs = request.toolOutputs ?? [];
     const tools = request.tools ?? [];
@@ -161,7 +323,6 @@ export class OpenAiResponsesProvider implements LlmProvider {
     if (tools.length > this.config.maxTools) {
       throw new LlmRequestError(`Tool count exceeds the configured limit of ${this.config.maxTools}.`);
     }
-
     const inputChars =
       (request.instructions?.length ?? 0) +
       messages.reduce((total, message) => total + message.content.length, 0) +
@@ -169,90 +330,57 @@ export class OpenAiResponsesProvider implements LlmProvider {
     if (inputChars > this.config.maxInputChars) {
       throw new LlmRequestError(`Input exceeds the configured limit of ${this.config.maxInputChars} characters.`);
     }
-
     const maxOutputTokens = request.maxOutputTokens ?? this.config.maxOutputTokens;
     if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens > this.config.maxOutputTokens) {
       throw new LlmRequestError(
         `maxOutputTokens must be between 1 and the configured limit of ${this.config.maxOutputTokens}.`,
       );
     }
+  }
 
-    const input: UnknownRecord[] = [
-      ...messages.map((message) => ({ role: message.role, content: message.content })),
-      ...toolOutputs.map((output) => ({
-        type: "function_call_output",
-        call_id: output.callId,
-        output: jsonOutput(output.output),
-      })),
-    ];
-    const body: UnknownRecord = {
-      model: this.config.model,
-      input,
-      max_output_tokens: maxOutputTokens,
-      store: false,
-      ...(request.instructions ? { instructions: request.instructions } : {}),
-      ...(tools.length ? { tools: tools.map(toolPayload) } : {}),
-      ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
-      ...(request.parallelToolCalls !== undefined
-        ? { parallel_tool_calls: request.parallelToolCalls }
-        : {}),
-      ...(request.session?.previousResponseId
-        ? { previous_response_id: request.session.previousResponseId }
-        : {}),
-      ...(request.metadata ? { metadata: request.metadata } : {}),
-    };
-
+  private async post(body: UnknownRecord, signal?: AbortSignal): Promise<Response> {
     const controller = new AbortController();
     let timedOut = false;
     const timeout = setTimeout(() => {
       timedOut = true;
       controller.abort();
     }, this.config.timeoutMs);
-    const abort = () => controller.abort(request.signal?.reason);
-    request.signal?.addEventListener("abort", abort, { once: true });
-
+    const abort = () => controller.abort(signal?.reason);
+    signal?.addEventListener("abort", abort, { once: true });
     try {
-      if (request.signal?.aborted) throw new LlmAbortedError("LLM request was aborted.");
+      if (signal?.aborted) throw new LlmAbortedError("LLM request was aborted.");
       const headers = new Headers({ "content-type": "application/json" });
       this.config.authorize(headers);
-      const response = await this.fetchImpl(`${this.config.baseUrl}/responses`, {
+      return await this.fetchImpl(`${this.config.baseUrl}/responses`, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
         signal: controller.signal,
       });
-      if (!response.ok) throw await errorFromResponse(response);
-
-      const payload: unknown = await response.json();
-      if (!isRecord(payload)) throw new LlmRequestError("LLM provider returned an invalid response body.");
-      const id = optionalString(payload.id);
-      if (!id) throw new LlmRequestError("LLM provider response is missing an id.");
-      const incompleteDetails = isRecord(payload.incomplete_details) ? payload.incomplete_details : undefined;
-      return {
-        id,
-        provider: this.name,
-        model: optionalString(payload.model) ?? this.config.model,
-        status: statusOf(payload.status),
-        text: parseText(payload),
-        toolCalls: parseToolCalls(payload.output),
-        ...(parseUsage(payload.usage) ? { usage: parseUsage(payload.usage) } : {}),
-        session: { previousResponseId: id },
-        ...(response.headers.get("x-request-id")
-          ? { requestId: response.headers.get("x-request-id")! }
-          : {}),
-        ...(optionalString(incompleteDetails?.reason)
-          ? { incompleteReason: optionalString(incompleteDetails?.reason) }
-          : {}),
-      };
     } catch (error) {
       if (timedOut) throw new LlmTimeoutError(`LLM request exceeded ${this.config.timeoutMs} ms.`);
-      if (request.signal?.aborted || (controller.signal.aborted && !timedOut)) {
+      if (signal?.aborted || (controller.signal.aborted && !timedOut)) {
         throw new LlmAbortedError("LLM request was aborted.");
       }
       throw error;
     } finally {
       clearTimeout(timeout);
-      request.signal?.removeEventListener("abort", abort);
+      signal?.removeEventListener("abort", abort);
     }
+  }
+}
+
+/** Parses one SSE block and returns its typed payload for Responses events. */
+function parseSseBlock(block: string): UnknownRecord | undefined {
+  let data: string | undefined;
+  for (const line of block.split("\n")) {
+    if (line.startsWith("data:")) data = line.slice(5).trim();
+  }
+  if (!data) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(data);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
   }
 }

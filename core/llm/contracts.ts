@@ -80,9 +80,20 @@ export interface LlmResponseResult {
   incompleteReason?: string;
 }
 
+export type LlmStreamEvent =
+  | { type: "text_delta"; text: string }
+  | { type: "done"; result: LlmResponseResult }
+  | { type: "error"; error: Error };
+
 export interface LlmProvider {
   readonly name: string;
   createResponse(request: LlmResponseRequest): Promise<LlmResponseResult>;
+  /**
+   * Optional server-sent streaming variant. Implementations that support it
+   * should yield text_delta events while generating, then a single done event
+   * carrying the normalized result. Errors are surfaced as an error event.
+   */
+  createStream?(request: LlmResponseRequest): AsyncIterable<LlmStreamEvent>;
 }
 
 export class LlmConfigurationError extends Error {

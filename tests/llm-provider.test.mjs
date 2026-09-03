@@ -221,3 +221,75 @@ test("Responses provider forwards the built-in web search tool without exposing 
   assert.equal(captured.store, false);
   assert.equal(result.text, "researched");
 });
+
+test("reasoning models strip tool_choice and parallel_tool_calls to avoid provider errors", async () => {
+  let captured;
+  const provider = llm.createConfiguredLlmProvider({
+    environment: environment({ LLM_MODEL: "o3-mini" }),
+    fetch: async (_url, init) => {
+      captured = JSON.parse(init.body);
+      return Response.json({ id: "resp_r", model: "o3-mini", status: "completed", output_text: "done", output: [] });
+    },
+  });
+  await provider.createResponse({
+    messages: [{ role: "user", content: "x" }],
+    tools: [{ name: "get_node", description: "read a node", parameters: { type: "object", properties: {} } }],
+    toolChoice: "required",
+    parallelToolCalls: true,
+  });
+  assert.equal(captured.tool_choice, undefined);
+  assert.equal(captured.parallel_tool_calls, undefined);
+  assert.equal(captured.tools.length, 1);
+});
+
+test("tool_choice rejection is retried once without tool_choice", async () => {
+  let calls = 0;
+  const provider = llm.createConfiguredLlmProvider({
+    environment: environment(),
+    fetch: async (_url, init) => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify({ error: { message: "Thinking mode does not support this tool_choice.", code: "invalid_parameter" } }), { status: 400, headers: { "content-type": "application/json" } });
+      }
+      const body = JSON.parse(init.body);
+      assert.equal(body.tool_choice, undefined);
+      return Response.json({ id: "resp_retry", model: "test-model", status: "completed", output_text: "ok", output: [] });
+    },
+  });
+  const result = await provider.createResponse({
+    messages: [{ role: "user", content: "x" }],
+    tools: [{ name: "t", description: "d", parameters: { type: "object", properties: {} } }],
+    toolChoice: "required",
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.text, "ok");
+});
+
+test("streaming responses yield text deltas and a completed result", async () => {
+  const encoder = new TextEncoder();
+  const chunks = [
+    'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"FMCW "}\n\n',
+    'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"radar"}\n\n',
+    'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_s1","model":"test-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"FMCW radar"}]}],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}\n\n',
+  ];
+  let capturedBody;
+  const provider = llm.createConfiguredLlmProvider({
+    environment: environment(),
+    fetch: async (_url, init) => {
+      capturedBody = JSON.parse(init.body);
+      return new Response(new ReadableStream({ start(controller) { for (const c of chunks) controller.enqueue(encoder.encode(c)); controller.close(); } }), { status: 200, headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  const deltas = [];
+  let doneResult;
+  for await (const event of provider.createStream({ messages: [{ role: "user", content: "explain" }] })) {
+    if (event.type === "text_delta") deltas.push(event.text);
+    else if (event.type === "done") doneResult = event.result;
+    else if (event.type === "error") throw event.error;
+  }
+  assert.equal(capturedBody.stream, true);
+  assert.deepEqual(deltas, ["FMCW ", "radar"]);
+  assert.equal(doneResult.text, "FMCW radar");
+  assert.equal(doneResult.session.previousResponseId, "resp_s1");
+  assert.equal(doneResult.usage.totalTokens, 15);
+});
