@@ -115,10 +115,37 @@ export const FMCW_PROFILE: TaskProfile = {
   visualBranches: ["foundation", "signal", "data", "system", "ai"],
 
   // ============================================================
-  // Step 2：节点类型与边类型（待抽取，当前使用基础类型）
+  // Step 2：节点类型与边类型（已完成抽取）
   // ============================================================
-  nodeTypes: [],  // Step 2 填充：从 schema.ts 的 NODE_TYPE_SEMANTICS 抽取
-  edgeTypes: [],  // Step 2 填充：从 schema.ts 的 EdgeType 抽取
+  // 11 种节点类型，每种硬编码规定"只放一个什么"和"禁止什么"
+  nodeTypes: [
+    { type: "domain", label: "知识域", singular: "一个知识域", forbidden: [], note: "分类节点，用于组织子节点，不承载具体知识内容", isGranularSensitive: false },
+    { type: "problem", label: "问题/现象", singular: "一个问题或现象", forbidden: ["解决方法", "算法", "子问题", "多个并列问题"], note: "只描述问题/现象本身（定义、原因、影响）；解决方法必须是独立的 method/algorithm 节点，通过 MITIGATES 等关系关联；子问题必须拆分为独立 problem 子节点", isGranularSensitive: true },
+    { type: "concept", label: "概念", singular: "一个概念", forbidden: ["多个并列概念", "方法", "算法"], note: "只定义一个概念及其边界；多个并列概念必须拆分为独立 concept 子节点，共享共性父节点", isGranularSensitive: true },
+    { type: "method", label: "方法", singular: "一个方法或解决方案", forbidden: ["多个并列方法", "问题描述", "概念定义"], note: "只描述一个方法的流程和实现；多个方法必须拆分为独立 method 子节点", isGranularSensitive: true },
+    { type: "algorithm", label: "算法", singular: "一个算法", forbidden: ["多个并列算法", "问题描述"], note: "只描述一个算法的步骤、复杂度和实现；多个算法必须拆分", isGranularSensitive: true },
+    { type: "model", label: "模型", singular: "一个模型", forbidden: ["多个并列模型", "问题描述"], note: "只描述一个模型的假设、公式和适用范围", isGranularSensitive: true },
+    { type: "component", label: "组件", singular: "一个组件或硬件模块", forbidden: ["多个并列组件"], note: "只描述一个组件的功能、接口和特性", isGranularSensitive: false },
+    { type: "artifact", label: "制品", singular: "一个制品、工具或数据集", forbidden: ["多个并列制品"], note: "只描述一个制品的用途、来源和使用方式", isGranularSensitive: false },
+    { type: "parameter", label: "参数", singular: "一个参数", forbidden: ["多个并列参数"], note: "只描述一个参数的定义、取值范围和影响", isGranularSensitive: false },
+    { type: "metric", label: "指标", singular: "一个指标", forbidden: ["多个并列指标"], note: "只描述一个指标的定义、计算方式和意义", isGranularSensitive: false },
+    { type: "application", label: "应用", singular: "一个应用场景", forbidden: ["多个并列场景"], note: "只描述一个应用场景的需求、约束和方案", isGranularSensitive: false },
+  ],
+  // 12 种边类型，含方向定义（directed/symmetric）
+  edgeTypes: [
+    { type: "SIMILAR_TO", label: "相似于", direction: "symmetric", description: "两个节点在概念或功能上相似" },
+    { type: "ALTERNATIVE_TO", label: "替代于", direction: "symmetric", description: "一个节点可以替代另一个节点" },
+    { type: "PREREQUISITE_OF", label: "是...的前置", direction: "directed", description: "source 是理解 target 的前置知识" },
+    { type: "PART_OF", label: "是...的一部分", direction: "directed", description: "source 是 target 的组成部分" },
+    { type: "INPUT_TO", label: "输入到", direction: "directed", description: "source 是 target 的输入" },
+    { type: "OUTPUT_OF", label: "是...的输出", direction: "directed", description: "source 是 target 的输出" },
+    { type: "USES_MODEL", label: "使用模型", direction: "directed", description: "source 使用 target 模型" },
+    { type: "IMPLEMENTS", label: "实现", direction: "directed", description: "source 实现了 target 方法/算法" },
+    { type: "DERIVED_FROM", label: "派生自", direction: "directed", description: "source 派生自 target" },
+    { type: "AFFECTS", label: "影响", direction: "directed", description: "source 影响 target" },
+    { type: "MITIGATES", label: "缓解", direction: "directed", description: "source 方法/算法缓解了 target 问题/现象" },
+    { type: "EVALUATED_BY", label: "由...评估", direction: "directed", description: "source 由 target 指标/方法评估" },
+  ],
 
   // ============================================================
   // Step 3：栏目目录（待抽取，当前使用 CARD_SECTION_CATALOG）
