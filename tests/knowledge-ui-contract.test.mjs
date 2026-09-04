@@ -53,8 +53,8 @@ test("Agent and knowledge-card source expose the compact unified interaction con
   const agent = await readFile(new URL("../features/agent/components/AgentPanel.tsx", import.meta.url), "utf8");
   const card = await readFile(new URL("../features/knowledge-graph/components/KnowledgeCardPanel.tsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-  assert.match(agent, /\/api\/agent\/deep-search/);
-  assert.match(agent, /总结对话/);
+  assert.match(agent, /\/api\/agent\/jobs/);
+  assert.match(agent, /总结并补充知识/);
   assert.match(agent, /确认写入/);
   assert.match(agent, /knowledge_candidate/);
   assert.match(agent, /"collapsed" \| "compact" \| "overlay"/);
@@ -68,7 +68,7 @@ test("Agent and knowledge-card source expose the compact unified interaction con
   assert.match(styles, /\.graph-agent \{[^}]*height: 200px/);
   assert.match(styles, /\.graph-agent\.overlay \{[^}]*position: absolute/);
   assert.match(styles, /\.resize-handle/);
-  assert.match(styles, /font-size: 12px !important/);
+  assert.match(styles, /font-size: var\(--font-sm2\) !important/);
 });
 
 test("topology columns preserve primary-tree depth when a parent is opened", async () => {

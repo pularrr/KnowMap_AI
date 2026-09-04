@@ -51,13 +51,13 @@ export function KnowledgeCardPanel({ selectedId, onReveal, dataset = expandedKno
   const pageSections = card?.sections
     .filter((section) => getCardSectionDefinition(section.type).collection === activePage)
     .sort((left, right) => getCardSectionDefinition(left.type).order - getCardSectionDefinition(right.type).order) ?? [];
-  const history = useMemo(() => {
+  const history = (() => {
     const runtime = (dataset.history ?? []).filter((entry) => entry.nodeId === selected.id);
     const unique = new Map([...runtime, ...localHistory].map((entry) => [entry.id, entry]));
     const entries = [...unique.values()].sort((left, right) => right.occurredAt.localeCompare(left.occurredAt));
     if (!entries.some((entry) => entry.kind === "initialized")) entries.push({ id: `initialized-${selected.id}`, nodeId: selected.id, kind: "initialized", summary: "知识节点与首版知识卡片完成初始化。", occurredAt: "1970-01-01T00:00:00.000Z", revision: 1 });
     return entries.slice(0, 15);
-  }, [dataset.history, localHistory, selected.id]);
+  })();
 
   const prepareSave = async () => {
     setSaveError("");

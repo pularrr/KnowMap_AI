@@ -18,27 +18,6 @@ type Message = {
   result?: AgentInteractionResult;
 };
 
-type SseEvent = { event: string; data: Record<string, unknown> };
-
-function parseSseBlock(block: string): SseEvent | undefined {
-  let event = "message";
-  let data = "";
-  for (const line of block.split("\n")) {
-    if (line.startsWith("event:")) event = line.slice(6).trim();
-    else if (line.startsWith("data:")) data += line.slice(5).trim();
-  }
-  if (!data) return undefined;
-  try {
-    const parsed = JSON.parse(data) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return { event, data: parsed as Record<string, unknown> };
-    }
-  } catch {
-    // Ignore malformed frames and keep waiting for the next complete block.
-  }
-  return undefined;
-}
-
 export function AgentPanel({ selected, sessionId, onCommitted }: { selected: KnowledgeNode; sessionId: string; onReveal: (id: string) => void; onCommitted?: () => Promise<void> | void }) {
   const [mode, setMode] = useState<PanelMode>("compact");
   const [query, setQuery] = useState("");
@@ -53,109 +32,52 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
     if (thread) thread.scrollTop = thread.scrollHeight;
   }, [messages]);
 
-  const request = async (path: string, payload: object): Promise<AgentInteractionResult> => {
-    const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error ?? "Agent 请求失败。");
-    return result as AgentInteractionResult;
+  useEffect(() => {
+    if (!sessionId || sessionId === "local-session") return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const response = await fetch("/api/agent/jobs?sessionId=" + encodeURIComponent(sessionId), { cache: "no-store" });
+        if (!response.ok) throw new Error("任务状态加载失败");
+        const { jobs } = await response.json() as { jobs: Array<{ id: string; nodeId: string; kind: string; query: string; text: string; state: string; progress?: string; result?: AgentInteractionResult; error?: string }> };
+        if (!cancelled) setMessages((current) => [
+          ...current.filter((item) => !item.id.startsWith("job-")),
+          ...jobs.flatMap((job): Message[] => [
+            { id: "job-user-" + job.id, role: "user", label: "你", text: job.query },
+            { id: "job-reply-" + job.id, role: "assistant", label: job.kind === "chat" ? "AI 回答" : job.kind === "deep-search" ? "深度搜索" : "知识整理",
+              text: job.text || job.error || job.progress || "", streaming: job.state === "running", result: job.result },
+          ]),
+        ]);
+      } catch { /* The server task continues; reconnect on the next poll. */ }
+      if (!cancelled) timer = setTimeout(poll, document.hidden ? 4000 : 1000);
+    };
+    void poll();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [sessionId]);
+
+  const startJob = async (kind: "chat" | "deep-search" | "ingest" | "summary", text: string, sourceText?: string) => {
+    setBusy(true); setError("");
+    setMode((current) => current === "collapsed" ? "compact" : current);
+    try {
+      const response = await fetch("/api/agent/jobs", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId, nodeId: selected.id, kind, query: text, sourceText, sourceKind: ingestKind }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "启动任务失败");
+      setQuery("");
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "启动任务失败"); }
+    finally { setBusy(false); }
   };
 
   const ask = async (event: FormEvent) => {
     event.preventDefault();
-    const text = query.trim();
-    if (!text || busy) return;
-    const pendingId = `reply-${Date.now()}`;
-    setQuery("");
-    setError("");
-    setBusy(true);
-    setMode((current) => (current === "collapsed" ? "compact" : current));
-    setMessages((current) => [
-      ...current,
-      { id: `user-${pendingId}`, role: "user", label: "你", text },
-      { id: pendingId, role: "assistant", label: "AI 回答", text: "", streaming: true },
-    ]);
-    try {
-      const response = await fetch("/api/agent/chat", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sessionId, nodeId: selected.id, query: text }),
-      });
-      if (!response.ok || !response.body) {
-        const result = await response.json().catch(() => undefined) as { error?: string } | undefined;
-        throw new Error(result?.error ?? "Agent 请求失败。");
-      }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let buffer = "";
-      let finalResult: AgentInteractionResult | undefined;
-      let sawDone = false;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const blocks = buffer.split("\n\n");
-        buffer = blocks.pop() ?? "";
-        for (const block of blocks) {
-          const parsed = parseSseBlock(block);
-          if (!parsed) continue;
-          if (parsed.event === "meta") {
-            const meta = parsed.data;
-            const label = meta.mode === "online" ? "AI 回答" : "离线回答";
-            const model = typeof meta.model === "string" ? meta.model : "";
-            setMessages((current) => current.map((item) => (item.id === pendingId ? { ...item, label: `${label}${model ? ` · ${model}` : ""}` } : item)));
-          } else if (parsed.event === "delta") {
-            const delta = typeof parsed.data.text === "string" ? parsed.data.text : "";
-            if (delta) setMessages((current) => current.map((item) => (item.id === pendingId ? { ...item, text: item.text + delta } : item)));
-          } else if (parsed.event === "done") {
-            finalResult = parsed.data.result as AgentInteractionResult;
-            sawDone = true;
-            setMessages((current) => current.map((item) => (item.id === pendingId ? { ...item, streaming: false, result: finalResult } : item)));
-          } else if (parsed.event === "error") {
-            const message = typeof parsed.data.message === "string" ? parsed.data.message : "Agent 请求失败。";
-            throw new Error(message);
-          }
-        }
-      }
-      if (finalResult) {
-        appendKnowledgeHistory({ nodeId: selected.id, kind: finalResult.candidate ? "candidate_generated" : "question_summary", summary: finalResult.candidate?.summary ?? finalResult.text });
-      } else if (!sawDone) {
-        setMessages((current) => current.map((item) => (item.id === pendingId ? { ...item, streaming: false } : item)));
-      }
-    } catch (caught) {
-      const message = caught instanceof Error ? caught.message : "Agent 请求失败。";
-      setError(message);
-      setMessages((current) => current.map((item) => (item.id === pendingId ? { ...item, streaming: false, label: "回答失败" } : item)));
-    } finally {
-      setBusy(false);
-    }
+    if (query.trim() && !busy) await startJob("chat", query.trim());
   };
-
   const run = async (kind: "deep-search" | "ingest") => {
     if (busy) return;
-    setError("");
-    setBusy(true);
-    setMode((current) => (current === "collapsed" ? "compact" : current));
-    const userText = kind === "ingest" ? query.trim() : "";
-    const label = kind === "ingest" ? "资料整理" : "深度搜索";
-    const pendingId = `task-${Date.now()}`;
-    if (userText) {
-      setQuery("");
-      setMessages((current) => [...current, { id: `user-${pendingId}`, role: "user", label: "你", text: userText }]);
-    }
-    setMessages((current) => [...current, { id: pendingId, role: "assistant", label, text: "", streaming: true }]);
-    try {
-      const path = kind === "ingest" ? "/api/knowledge/ingest" : "/api/agent/deep-search";
-      const result = await request(path, { sessionId, nodeId: selected.id, query: userText || query, text: userText, kind: kind === "ingest" ? ingestKind : undefined, title: kind === "ingest" ? `资料整理（${ingestKind}）` : undefined });
-      const finalLabel = kind === "ingest" ? "资料整理" : result.mode === "online" ? "深度搜索" : "离线覆盖检查";
-      setMessages((current) => current.map((item) => (item.id === pendingId ? { ...item, label: finalLabel, text: result.text, streaming: false, result } : item)));
-      appendKnowledgeHistory({ nodeId: selected.id, kind: result.candidate ? "candidate_generated" : "question_summary", summary: result.candidate?.summary ?? result.text });
-    } catch (caught) {
-      const message = caught instanceof Error ? caught.message : "Agent 请求失败。";
-      setError(message);
-      setMessages((current) => current.map((item) => (item.id === pendingId ? { ...item, streaming: false, label: `${label}失败` } : item)));
-    } finally {
-      setBusy(false);
-    }
+    await startJob(kind, kind === "ingest" ? "整理资料并补充知识" : query.trim() || "围绕“" + selected.title + "”扩展知识网络", kind === "ingest" ? query.trim() : undefined);
   };
 
   const uploadFile = async (file: File) => {
@@ -186,11 +108,21 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
     }
   };
 
-  const summarize = () => {
-    const text = messages.length
-      ? messages.slice(-6).map((message) => `${message.label}：${message.text}`).join("\n").slice(0, 1_200)
-      : "当前还没有可总结的对话。";
-    setMessages((current) => [...current, { id: `summary-${Date.now()}`, role: "assistant", label: "对话摘要", text }]);
+  const loadReference = async () => {
+    setBusy(true);setError("");
+    try {
+      const response=await fetch("/api/knowledge/reference",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({sessionId})});
+      const result=await response.json() as AgentInteractionResult & {error?:string};
+      if(!response.ok) throw new Error(result.error || "基准加载失败");
+      setMessages((current)=>[...current,{id:"reference-"+Date.now(),role:"assistant",label:"基准扩充",text:result.text,result}]);
+      setMode("overlay");
+    } catch(error) {setError(String(error));} finally {setBusy(false);}
+  };
+
+  const summarize = async () => {
+    const completed = messages.filter((item) => !item.streaming && item.text.trim());
+    if (!completed.length) { setError("当前还没有可整理的对话。"); return; }
+    await startJob("summary", "总结当前对话并补充知识", completed.map((item) => item.label + "：" + item.text).join("\\n").slice(-80000));
   };
 
   const confirm = async (candidate: PendingChangeView) => {
@@ -225,8 +157,9 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
       <header className="graph-agent-head">
         <div><span>AI AGENT</span><strong>{selected.title}</strong></div>
         <div className="graph-agent-actions">
+          <button className="summary-button" onClick={() => void loadReference()} disabled={busy}>基准扩充</button>
           <button className="deep-search-button" onClick={() => void run("deep-search")} disabled={busy}>深度搜索</button>
-          <button className="summary-button" onClick={summarize} disabled={busy}>总结对话</button>
+          <button className="summary-button" onClick={() => void summarize()} disabled={busy}>总结并补充知识</button>
           <label className="summary-button file-upload-label" aria-disabled={busy}>
             上传资料
             <input type="file" accept=".pdf,image/png,image/jpeg,image/webp" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadFile(f); e.target.value = ""; }} disabled={busy} />
@@ -243,6 +176,7 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
             <article key={message.id} className={`agent-message ${message.role}${message.result?.candidate ? " knowledge_candidate" : ""}${message.streaming ? " streaming" : ""}`}>
               <span>{message.label}{message.result?.model ? <em>{message.result.model}</em> : null}</span>
               {message.role === "user" ? <p className="user-text">{message.text}</p> : (message.streaming && !message.text) ? <p className="agent-thinking"><i /><i /><i />正在思考…</p> : <MarkdownMessage text={message.text || (message.streaming ? "…" : "（空回答）")} />}
+              {message.streaming && message.id.startsWith("job-reply-") ? <button className="stop-task" onClick={() => { void fetch("/api/agent/jobs", {method:"DELETE",headers:{"content-type":"application/json"},body:JSON.stringify({sessionId,id:message.id.slice("job-reply-".length)})}).then((response) => { if (!response.ok) setError("停止任务失败，请重试。"); }); }}>停止任务</button> : null}
               {message.streaming && message.text ? <span className="stream-cursor" aria-hidden="true">▍</span> : null}
               {message.result?.observations.length ? <details className="observation-log"><summary>{message.result.observations.length} 次知识观察</summary><ol>{message.result.observations.map((item) => <li key={`${message.id}-${item.round}`}>{item.summary}</li>)}</ol></details> : null}
               {message.result?.candidate ? <div className="candidate-details"><b>{message.result.candidate.summary}</b><p>{message.result.candidate.rationale}</p><small>新增 {message.result.candidate.projectionDiff.nodes.added.length} 个节点，更新 {message.result.candidate.projectionDiff.cards.updated.length + message.result.candidate.projectionDiff.cards.added.length} 张卡片</small><div className="candidate-actions"><button onClick={() => void confirm(message.result!.candidate!)} disabled={busy}>确认写入</button><button onClick={() => void reject(message.id, message.result!.candidate!)} disabled={busy}>拒绝</button></div></div> : null}

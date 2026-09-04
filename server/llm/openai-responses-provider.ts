@@ -101,7 +101,7 @@ function parseToolCalls(output: unknown): LlmFunctionCall[] {
 }
 
 function parseText(response: UnknownRecord): string {
-  if (typeof response.output_text === "string") return response.output_text;
+  if (typeof response.output_text === "string" && response.output_text.trim()) return response.output_text;
   if (!Array.isArray(response.output)) return "";
   const fragments: string[] = [];
   for (const item of response.output) {
@@ -226,6 +226,7 @@ async function errorFromResponse(response: Response): Promise<LlmHttpError> {
 
 export class OpenAiResponsesProvider implements LlmProvider {
   readonly name = "openai-responses";
+  get limits() { return { maxOutputTokens: this.config.maxOutputTokens, maxInputChars: this.config.maxInputChars }; }
 
   constructor(
     private readonly config: LlmServerConfig,
@@ -234,6 +235,7 @@ export class OpenAiResponsesProvider implements LlmProvider {
 
   async createResponse(request: LlmResponseRequest): Promise<LlmResponseResult> {
     this.validate(request);
+    request = { ...request, signal: AbortSignal.any([AbortSignal.timeout(this.config.timeoutMs), ...(request.signal ? [request.signal] : [])]) };
     const runOnce = async (withToolChoice: boolean): Promise<LlmResponseResult> => {
       const body = buildRequestBody({ ...request, toolChoice: withToolChoice ? request.toolChoice : undefined }, this.config, false);
       const response = await this.post(body, request.signal);
@@ -252,6 +254,7 @@ export class OpenAiResponsesProvider implements LlmProvider {
 
   async *createStream(request: LlmResponseRequest): AsyncIterable<LlmStreamEvent> {
     this.validate(request);
+    request = { ...request, signal: AbortSignal.any([AbortSignal.timeout(this.config.timeoutMs), ...(request.signal ? [request.signal] : [])]) };
     const runOnce = async (): Promise<Response> => {
       const body = buildRequestBody(request, this.config, true);
       return this.post(body, request.signal);

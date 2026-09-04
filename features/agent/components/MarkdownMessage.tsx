@@ -15,7 +15,7 @@ import "katex/dist/katex.min.css";
  */
 function normalizeMathDelimiters(text: string): string {
   const parts: string[] = [];
-  let remaining = text;
+  const remaining = text;
   // Split by fenced code blocks (```...```) so we skip their content.
   const fenceRe = /```[\s\S]*?```/g;
   let lastIndex = 0;

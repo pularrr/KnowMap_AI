@@ -126,10 +126,12 @@ export function executeKnowledgeTool(
     const query = stringArg(args, "query").toLocaleLowerCase();
     const limit = integerArg(args, "limit", 8, 1, 12);
     const cardText = new Map(dataset.cards.map((card) => [card.nodeId, JSON.stringify(card.blocks)]));
-    const matches = dataset.nodes.filter((item) =>
-      `${item.canonicalName} ${item.aliases.join(" ")} ${item.shortFact} ${cardText.get(item.id) ?? ""}`
-        .toLocaleLowerCase().includes(query),
-    ).slice(0, limit);
+    const terms = query.split(/[\s,，;；]+/).filter((term) => term.length >= 2);
+    const matches = dataset.nodes.map((item) => {
+      const name = `${item.canonicalName} ${item.aliases.join(" ")}`.toLocaleLowerCase();
+      const text = `${name} ${item.shortFact} ${cardText.get(item.id) ?? ""}`.toLocaleLowerCase();
+      return { item, score: (name.includes(query) ? 10 : 0) + terms.reduce((score, term) => score + (name.includes(term) ? 4 : text.includes(term) ? 1 : 0), 0) };
+    }).filter((entry) => entry.score > 0).sort((a,b) => b.score-a.score).slice(0,limit).map((entry) => entry.item);
     return { summary: `图内搜索“${query}”命中 ${matches.length} 个节点。`, output: matches as unknown as JsonValue };
   }
 

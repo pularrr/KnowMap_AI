@@ -7,6 +7,7 @@ type StoredLlmConfig = {
   apiKey: string;
   baseUrl: string;
   model: string;
+  maxOutputTokens?: number;
 };
 
 export type PublicLlmStatus =
@@ -17,6 +18,7 @@ export interface LlmConfigUpdate {
   apiKey?: string;
   baseUrl: string;
   model: string;
+  maxOutputTokens?: number;
 }
 
 export class RuntimeLlmConfigStore {
@@ -30,7 +32,7 @@ export class RuntimeLlmConfigStore {
       LLM_BASE_URL: system.LLM_BASE_URL?.trim() || stored?.baseUrl,
       LLM_MODEL: system.LLM_MODEL?.trim() || stored?.model,
       LLM_TIMEOUT_MS: system.LLM_TIMEOUT_MS,
-      LLM_MAX_OUTPUT_TOKENS: system.LLM_MAX_OUTPUT_TOKENS,
+      LLM_MAX_OUTPUT_TOKENS: system.LLM_MAX_OUTPUT_TOKENS || (stored?.maxOutputTokens ? String(stored.maxOutputTokens) : undefined),
       LLM_MAX_TOOL_ROUNDS: system.LLM_MAX_TOOL_ROUNDS,
       LLM_MAX_INPUT_CHARS: system.LLM_MAX_INPUT_CHARS,
       LLM_MAX_TOOLS: system.LLM_MAX_TOOLS,
@@ -58,6 +60,7 @@ export class RuntimeLlmConfigStore {
       LLM_API_KEY: apiKey,
       LLM_BASE_URL: update.baseUrl,
       LLM_MODEL: update.model,
+      LLM_MAX_OUTPUT_TOKENS: update.maxOutputTokens !== undefined ? String(update.maxOutputTokens) : previous?.maxOutputTokens ? String(previous.maxOutputTokens) : processLlmEnvironment().LLM_MAX_OUTPUT_TOKENS,
     };
     const validated = new LlmServerConfig(candidate);
     const file: StoredLlmConfig = {
@@ -65,6 +68,7 @@ export class RuntimeLlmConfigStore {
       apiKey: apiKey!,
       baseUrl: validated.baseUrl,
       model: validated.model,
+      maxOutputTokens: validated.maxOutputTokens,
     };
     mkdirSync(dirname(this.filePath), { recursive: true });
     const temporary = `${this.filePath}.tmp-${process.pid}`;

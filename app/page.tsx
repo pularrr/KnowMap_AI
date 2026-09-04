@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type PointerEvent } from "react";
+import { loadTypography } from "../features/agent/components/TypographySettings";
 import { LlmConfigDialog } from "../features/agent/components/LlmConfigDialog";
 import { AgentPanel } from "../features/agent/components/AgentPanel";
 import { KnowledgeCardPanel } from "../features/knowledge-graph/components/KnowledgeCardPanel";
@@ -39,6 +40,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    loadTypography();
     setDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
     setLeftWidth(Number(window.localStorage.getItem("fmcw-left-width")) || 250);
     setRightWidth(Number(window.localStorage.getItem("fmcw-right-width")) || 360);
@@ -97,7 +99,7 @@ export default function Home() {
         <div className="brand-block"><div className="brand-mark" aria-hidden="true"><span /><span /><span /></div><div><div className="eyebrow">RADAR SYSTEMS · KNOWLEDGE GRAPH</div><h1>FMCW 雷达全栈知识图谱 <em>AI</em></h1></div></div>
         <div className="top-actions">
           <div className="graph-stat"><b>{nodes.length}</b><span>知识节点</span></div><div className="graph-stat"><b>{dataset.domains.length}</b><span>知识域</span></div>
-          <button className={`ai-config-button ${llmStatus.configured ? "configured" : ""}`} onClick={() => setConfigOpen(true)}><i />{llmStatus.configured ? llmStatus.model : "AI 配置"}</button>
+          <button className={`ai-config-button ${llmStatus.configured ? "configured" : ""}`} onClick={() => setConfigOpen(true)}><i />{llmStatus.configured ? "设置 · " + llmStatus.model : "设置 · AI 配置"}</button>
           <button className="savepoint-button" onClick={() => void savepoint()}>保存版本</button>
           <button className="theme-button" onClick={() => setDark((value) => !value)} aria-label={dark ? "切换为明亮主题" : "切换为暗色主题"}><span className="theme-orbit">{dark ? "☾" : "☼"}</span><span>{dark ? "暗色" : "明亮"}</span></button>
         </div>
@@ -106,12 +108,12 @@ export default function Home() {
       <section className="workspace" style={workspaceStyle} aria-label="FMCW 雷达知识图谱工作区">
         <KnowledgeTree focusId={focusId} selectedId={selectedId} onReveal={reveal} nodes={nodes} layoutIndex={layoutIndex} />
         <div className="resize-handle left" role="separator" tabIndex={0} aria-label="调整左侧宽度" onPointerDown={(event) => startResize("left", event)} onKeyDown={(event) => { if (event.key === "ArrowLeft") resizeByKeyboard("left", -1); if (event.key === "ArrowRight") resizeByKeyboard("left", 1); }} />
-        <div className="graph-workbench"><KnowledgeGraphCanvas focusId={focusId} selectedId={selectedId} onSelect={setSelectedId} onReveal={reveal} dataset={dataset} layoutIndex={layoutIndex} /><AgentPanel key={selected.id} selected={selected} sessionId={sessionId} onReveal={reveal} onCommitted={refreshDataset} /></div>
+        <div className="graph-workbench"><KnowledgeGraphCanvas focusId={focusId} selectedId={selectedId} onSelect={setSelectedId} onReveal={reveal} dataset={dataset} layoutIndex={layoutIndex} /><AgentPanel selected={selected} sessionId={sessionId} onReveal={reveal} onCommitted={refreshDataset} /></div>
         <div className="resize-handle right" role="separator" tabIndex={0} aria-label="调整知识卡片宽度" onPointerDown={(event) => startResize("right", event)} onKeyDown={(event) => { if (event.key === "ArrowLeft") resizeByKeyboard("right", 1); if (event.key === "ArrowRight") resizeByKeyboard("right", -1); }} />
-        <aside className={inspectorOpen ? "inspector open" : "inspector"}><button className="inspector-toggle" onClick={() => setInspectorOpen((value) => !value)} aria-label={inspectorOpen ? "收起详情" : "展开详情"}>{inspectorOpen ? "›" : "‹"}</button><div className="inspector-content"><div className="inspector-heading">知识卡片</div><KnowledgeCardPanel key={selected.id} selectedId={selectedId} onReveal={reveal} dataset={dataset} layoutIndex={layoutIndex} sessionId={sessionId} onCommitted={refreshDataset} /></div></aside>
+        <aside className={inspectorOpen ? "inspector open" : "inspector"}><button className="inspector-toggle" onClick={() => setInspectorOpen((value) => !value)} aria-label={inspectorOpen ? "收起详情" : "展开详情"}>{inspectorOpen ? "›" : "‹"}</button><div className="inspector-content"><KnowledgeCardPanel key={selected.id} selectedId={selectedId} onReveal={reveal} dataset={dataset} layoutIndex={layoutIndex} sessionId={sessionId} onCommitted={refreshDataset} /></div></aside>
       </section>
 
-      <footer className="statusbar"><span><i className="online" />知识图谱 · 修订 {dataset.revision}</span><span>{llmStatus.configured ? `外部 LLM：${llmStatus.model}` : "离线模式"}</span><span>所有写入均需用户确认</span></footer>
+      <footer className="statusbar"><span><i className="online" />知识图谱 · 修订 {dataset.revision}</span><span>{llmStatus.configured ? `外部 LLM：${llmStatus.model}` : "离线模式"}</span></footer>
       <LlmConfigDialog open={configOpen} onClose={() => setConfigOpen(false)} onStatus={setLlmStatus} />
     </main>
   );

@@ -182,7 +182,10 @@ export function KnowledgeGraphCanvas({
           };
         }}
         onPointerMove={(event) => {
-          if (!dragRef.current) return;
+          const drag = dragRef.current;
+          if (!drag) return;
+          const pointerX = event.clientX;
+          const pointerY = event.clientY;
           const width = event.currentTarget.getBoundingClientRect().width;
           if (width < 1) return;
           const ratio = WORLD.width / width;
@@ -190,8 +193,8 @@ export function KnowledgeGraphCanvas({
             bounded(
               {
                 ...value,
-                x: dragRef.current!.vx + (event.clientX - dragRef.current!.x) * ratio,
-                y: dragRef.current!.vy + (event.clientY - dragRef.current!.y) * ratio,
+                x: drag.vx + (pointerX - drag.x) * ratio,
+                y: drag.vy + (pointerY - drag.y) * ratio,
               },
               focusPosition,
             ),

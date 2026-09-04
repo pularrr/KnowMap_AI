@@ -87,6 +87,7 @@ export type LlmStreamEvent =
 
 export interface LlmProvider {
   readonly name: string;
+  readonly limits?: { maxOutputTokens: number; maxInputChars: number };
   createResponse(request: LlmResponseRequest): Promise<LlmResponseResult>;
   /**
    * Optional server-sent streaming variant. Implementations that support it
