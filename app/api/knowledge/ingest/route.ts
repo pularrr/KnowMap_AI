@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { stageTextImport } from "../../../../core/ingestion/offline-intake";
 import { onlineAgentService } from "../../../../server/agent/online-agent-service";
+import { matchClaimsToGraph } from "../../../../server/agent/claim-matcher";
+import { createConfiguredLlmProvider } from "../../../../server/llm/provider-factory";
+import { runtimeLlmConfigStore } from "../../../../server/runtime/app-runtime";
 
 export const runtime = "nodejs";
 
@@ -46,14 +49,29 @@ export async function POST(request: Request) {
     if (!body.sessionId?.trim() || !body.nodeId?.trim() || !body.text?.trim()) throw new Error("sessionId, nodeId and source text are required.");
     const kind = body.kind ?? "document";
     const staged = stageTextImport({ kind, title: body.title?.trim() || "用户提供资料", text: body.text, suppliedBy: "local-user", currentNodeId: body.nodeId });
+
+    // P3-3: real graph matching before deep search. When a provider is
+    // configured, run the LLM + graph-retrieval matcher so the candidate is
+    // grounded in actual graph content instead of the hard-coded heuristic.
+    let matches = staged.matches;
+    if (runtimeLlmConfigStore().status().configured) {
+      try {
+        const provider = createConfiguredLlmProvider({ environment: runtimeLlmConfigStore().environment() });
+        matches = await matchClaimsToGraph(provider, (await import("../../../../server/runtime/app-runtime")).runtimeKnowledgeRepository().snapshot(), staged, body.nodeId);
+      } catch {
+        // Fail-open: keep the staged heuristic matches.
+      }
+    }
+
+    const stagedWithMatches: typeof staged = { ...staged, matches };
     const promptTemplate = INGEST_PROMPTS[kind] ?? INGEST_PROMPTS.document;
     const result = await onlineAgentService().deepSearch({
       sessionId: body.sessionId,
       nodeId: body.nodeId,
       query: `${promptTemplate}${body.text.slice(0, 20_000)}`,
-      staged,
+      staged: stagedWithMatches,
     });
-    return NextResponse.json({ ...result, stagedArtifactId: staged.artifact.id, stagedClaimCount: staged.claims.length, ingestKind: kind });
+    return NextResponse.json({ ...result, stagedArtifactId: staged.artifact.id, stagedClaimCount: staged.claims.length, ingestKind: kind, matchDecisions: matches.map((m) => ({ claimId: m.claimId, decision: m.decision, matchedNodeId: m.matchedNodeId ?? null, score: m.score })) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Knowledge ingestion failed." }, { status: 400 });
   }

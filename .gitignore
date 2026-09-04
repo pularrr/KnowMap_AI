@@ -41,4 +41,14 @@ next-env.d.ts
 /.sites-runtime/
 /outputs/
 /work/
+
+# tesseract OCR language data (downloaded at first use)
+*.traineddata
+
+# dev server log
+dev-server.log
+
+# local test artifacts
+test-*.png
+test-*.pdf
 /data/runtime/

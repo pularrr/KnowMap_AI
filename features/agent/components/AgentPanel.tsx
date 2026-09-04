@@ -158,6 +158,34 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
     }
   };
 
+  const uploadFile = async (file: File) => {
+    if (busy) return;
+    setError("");
+    setBusy(true);
+    setMode((current) => (current === "collapsed" ? "compact" : current));
+    const pendingId = `file-${Date.now()}`;
+    setMessages((current) => [...current, { id: pendingId, role: "assistant", label: `资料整理（${file.name}）`, text: "", streaming: true }]);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("sessionId", sessionId);
+      form.append("nodeId", selected.id);
+      form.append("kind", ingestKind);
+      const response = await fetch("/api/knowledge/ingest-file", { method: "POST", body: form });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "文件整理失败。");
+      const notes = result.parsedNotes?.length ? `\n\n> 解析说明：${result.parsedNotes.join("；")}` : "";
+      setMessages((current) => current.map((item) => (item.id === pendingId ? { ...item, label: result.mode === "online" ? "资料整理" : "离线覆盖检查", text: `${result.text}${notes}`, streaming: false, result } : item)));
+      appendKnowledgeHistory({ nodeId: selected.id, kind: result.candidate ? "candidate_generated" : "question_summary", summary: result.candidate?.summary ?? result.text });
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "文件整理失败。";
+      setError(message);
+      setMessages((current) => current.map((item) => (item.id === pendingId ? { ...item, streaming: false, label: "整理失败", text: message } : item)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const summarize = () => {
     const text = messages.length
       ? messages.slice(-6).map((message) => `${message.label}：${message.text}`).join("\n").slice(0, 1_200)
@@ -199,6 +227,10 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
         <div className="graph-agent-actions">
           <button className="deep-search-button" onClick={() => void run("deep-search")} disabled={busy}>深度搜索</button>
           <button className="summary-button" onClick={summarize} disabled={busy}>总结对话</button>
+          <label className="summary-button file-upload-label" aria-disabled={busy}>
+            上传资料
+            <input type="file" accept=".pdf,image/png,image/jpeg,image/webp" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadFile(f); e.target.value = ""; }} disabled={busy} />
+          </label>
           <button className="summary-button" onClick={() => void run("ingest")} disabled={busy || !query.trim()}>整理资料</button>
           <button className="agent-expand" onClick={() => setMode((current) => (current === "overlay" ? "compact" : "overlay"))} aria-label={mode === "overlay" ? "退出大窗" : "展开为大窗"}>{mode === "overlay" ? "↙" : "↗"}</button>
           <button className="agent-collapse" onClick={() => setMode((current) => (current === "collapsed" ? "compact" : "collapsed"))} aria-label={mode === "collapsed" ? "展开 Agent" : "收起 Agent"}>{mode === "collapsed" ? "⌃" : "⌄"}</button>

@@ -400,11 +400,14 @@ export class OnlineAgentService {
       if (observations.length >= 12) break;
     }
 
+    const matchContext = input.staged && input.staged.matches?.length
+      ? `\n\n【资料-图谱匹配判定（来自知识检索 Agent，需参考）】\n${JSON.stringify(input.staged.matches.map((m) => ({ claimId: m.claimId, decision: m.decision, matchedNodeId: m.matchedNodeId ?? null, score: m.score, rationale: m.rationale, ...(m as unknown as { proposedRelationType?: string }).proposedRelationType ? { proposedRelationType: (m as unknown as { proposedRelationType?: string }).proposedRelationType } : {} })))}`
+      : "";
     const finalResponse = await provider.createResponse({
       instructions: `你是 Knowledge Agent。使用已有图谱观察，并必须使用 web_search 核对外部知识，然后完成自检。只输出一个 JSON 对象，不要 Markdown：
 {"answer":"面向用户的研究总结","coverageAssessment":"是否全面及剩余缺口","proposal":{"summary":"候选摘要","rationale":"为何需要这些变更","cardBlocks":[{"nodeId":"已有节点ID","type":"${[...allowedBlockTypes].join("|")}","title":"栏目标题","text":"可验证内容"}],"newNodes":[{"canonicalName":"名称","shortFact":"一句事实","nodeType":"concept|method|algorithm|model|phenomenon|component|artifact|parameter|metric|application","parentId":"已有父节点ID","relationshipType":"PART_OF","relationshipRationale":"理由"}],"evidence":[{"title":"来源标题","url":"https://...","note":"该来源支持什么"}]}}。
-最多 2 个卡片变更、2 个新节点。若证据不足，让 proposal 为空对象。不得输出历史、密钥或内部策略。`,
-      messages,
+最多 2 个卡片变更、2 个新节点。若证据不足，让 proposal 为空对象。不得输出历史、密钥或内部策略。${input.staged ? "\n注意：本任务是资料整理。请参考上方“资料-图谱匹配判定”：decision=append-card 的声明优先落入已有节点 cardBlocks；decision=create-node 的声明优先进入 newNodes；decision=create-relation 的声明应通过关系表达。匹配判定与你的图谱观察冲突时，以你的完整观察为准并说明。不要为每条声明都建节点，避免碎片化。" : ""}`,
+      messages: [...messages, ...(matchContext ? [{ role: "user" as const, content: `研究问题：${clean(input.query, 2_000)}（资料整理任务）${matchContext}` }] : [])],
       tools: [{ type: "web_search" }],
       toolChoice: "required",
       maxOutputTokens: 8_192,
