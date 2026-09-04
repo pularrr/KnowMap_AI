@@ -20,12 +20,39 @@ export type NodeType =
   | "method"
   | "algorithm"
   | "model"
-  | "phenomenon"
   | "component"
   | "artifact"
   | "parameter"
   | "metric"
   | "application";
+
+/**
+ * 节点类型语义：硬编码约束每种节点"只放一个什么"。
+ * 这是节点粒度的核心规则，由类型决定而非提示词灵活解释。
+ * - concept: 只放一个概念（定义+边界）
+ * - method/algorithm: 只放一个解决方案/方法（流程+实现）
+ * - model: 只放一个模型（假设+公式+适用范围）
+ * - problem: 只放一个问题或现象（描述+原因+影响），不混入解决方法
+ * - component: 只放一个组件/硬件模块
+ * - artifact: 只放一个制品/工具/数据集
+ * - parameter: 只放一个参数
+ * - metric: 只放一个指标
+ * - application: 只放一个应用场景
+ * - domain: 分类节点，不适用"只放一个"约束
+ */
+export const NODE_TYPE_SEMANTICS: Record<NodeType, { singular: string; forbidden: string[]; note: string }> = {
+  domain: { singular: "一个知识域", forbidden: [], note: "分类节点，用于组织子节点，不承载具体知识内容" },
+  problem: { singular: "一个问题或现象", forbidden: ["解决方法", "算法", "子问题", "多个并列问题"], note: "只描述问题/现象本身（定义、原因、影响）；解决方法必须是独立的 method/algorithm 节点，通过 MITIGATES 等关系关联；子问题必须拆分为独立 problem 子节点" },
+  concept: { singular: "一个概念", forbidden: ["多个并列概念", "方法", "算法"], note: "只定义一个概念及其边界；多个并列概念必须拆分为独立 concept 子节点，共享共性父节点" },
+  method: { singular: "一个方法或解决方案", forbidden: ["多个并列方法", "问题描述", "概念定义"], note: "只描述一个方法的流程和实现；多个方法必须拆分为独立 method 子节点" },
+  algorithm: { singular: "一个算法", forbidden: ["多个并列算法", "问题描述"], note: "只描述一个算法的步骤、复杂度和实现；多个算法必须拆分" },
+  model: { singular: "一个模型", forbidden: ["多个并列模型", "问题描述"], note: "只描述一个模型的假设、公式和适用范围" },
+  component: { singular: "一个组件或硬件模块", forbidden: ["多个并列组件"], note: "只描述一个组件的功能、接口和特性" },
+  artifact: { singular: "一个制品、工具或数据集", forbidden: ["多个并列制品"], note: "只描述一个制品的用途、来源和使用方式" },
+  parameter: { singular: "一个参数", forbidden: ["多个并列参数"], note: "只描述一个参数的定义、取值范围和影响" },
+  metric: { singular: "一个指标", forbidden: ["多个并列指标"], note: "只描述一个指标的定义、计算方式和意义" },
+  application: { singular: "一个应用场景", forbidden: ["多个并列场景"], note: "只描述一个应用场景的需求、约束和方案" },
+};
 
 export type KnowledgeStatus = "draft" | "reviewed" | "published";
 

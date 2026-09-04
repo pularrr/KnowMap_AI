@@ -66,7 +66,7 @@ export const CARD_SECTION_CATALOG = [
     collection: "theory",
     order: 20,
     coverage: "core",
-    appliesTo: ["problem", "concept", "method", "algorithm", "model", "phenomenon", "component", "parameter", "metric"],
+    appliesTo: ["problem", "concept", "method", "algorithm", "model", "component", "parameter", "metric"],
   },
   {
     type: "assumptions",

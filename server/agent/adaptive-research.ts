@@ -97,7 +97,7 @@ export async function collectAdaptiveResearch(input: {
       }).slice(0, 100000) }];
       try {
         const { document } = await requestResearch(provider,
-          "你是采用 ReAct 的知识检索 Agent。Observe 当前节点及前轮发现；判断缺口；Act 深入一个尚未解决的问题，输出一批实质知识；再观察覆盖度。优先比较同层解决方案，再深入子问题和依赖。定义、原理、假设、正反例、工程取舍、验证、实现、应用与研究均需考察。每批累积后统一合并，不要逐条调用图内查重工具。新增节点可引用本批或此前批次新节点ID作为父级。当前topic不存在于正式图谱时，cardBlocks 使用topic.id。说明无法证实的主张。只有连续多轮没有实质新增时才标记收敛。", messages,
+          "你是采用 ReAct 的知识检索 Agent。Observe 当前节点及前轮发现；判断缺口；Act 深入一个尚未解决的问题，输出一批实质知识；再观察覆盖度。优先比较同层解决方案，再深入子问题和依赖。定义、原理、假设、正反例、工程取舍、验证、实现、应用与研究均需考察。每批累积后统一合并，不要逐条调用图内查重工具。新增节点可引用本批或此前批次新节点ID作为父级。当前topic不存在于正式图谱时，cardBlocks 使用topic.id。说明无法证实的主张。只有连续多轮没有实质新增时才标记收敛。\n\n【节点粒度硬约束（必须遵守，由节点类型决定）】\n1. 一个节点只放一个东西，由 nodeType 硬编码决定：concept=一个概念，method/algorithm=一个解决方案，model=一个模型，problem=一个问题或现象，parameter=一个参数，metric=一个指标，application=一个应用场景，component=一个组件，artifact=一个制品。\n2. 禁止把多个并列概念/方法/问题放在一个节点中。反例：\"CV、CA、CTRV、CTRA 描述不同机动\"（4个概念混在一起）。正例：父节点\"运动模型\" + 子节点\"CV模型\"、\"CA模型\"、\"CTRV模型\"、\"CTRA模型\"。\n3. 如果发现多个方法/概念/问题，它们必须有一个共性问题作为父节点，每个子节点只代表一个具体概念。\n4. problem 类型节点只描述问题/现象本身（定义、原因、影响），禁止混入解决方法或子问题。解决方法必须是独立的 method/algorithm 节点，通过 MITIGATES 等关系关联；子问题必须拆分为独立 problem 子节点。\n5. 节点名称（canonicalName）简短具体，不超过15字，禁止\"XX研究\"、\"XX概述\"等空泛命名，禁止名称中包含\"、\"\"/\"\"和\"等并列连词。\n6. 节点摘要（shortFact）是一句话定义，不超过50字；详细原理、推导、比较、工程取舍放知识卡栏目。", messages,
           { onDiagnostic: report, signal: deadline, onCall: () => {
             if (outOfBudget()) throw new Error("已达到研究预算");
             checkpoint.calls++;

@@ -6,7 +6,7 @@ import type { StagedKnowledgeImport } from "../../core/ingestion/contracts";
 import type { ResearchDocument } from "./research-output";
 
 const normalize = (value: string) => value.normalize("NFKC").trim().toLowerCase().replace(/\s+/g, "");
-const nodeTypes = new Set(["domain","problem","concept","method","algorithm","model","phenomenon","component","artifact","parameter","metric","application"]);
+const nodeTypes = new Set(["domain","problem","concept","method","algorithm","model","component","artifact","parameter","metric","application"]);
 const edgeTypes = new Set(["SIMILAR_TO","ALTERNATIVE_TO","PREREQUISITE_OF","PART_OF","INPUT_TO","OUTPUT_OF","USES_MODEL","IMPLEMENTS","DERIVED_FROM","AFFECTS","MITIGATES","EVALUATED_BY"]);
 
 export function operationsFromResearch(document: ResearchDocument, dataset: KnowledgeDataset, currentNodeId: string, staged?: StagedKnowledgeImport) {

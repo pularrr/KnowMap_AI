@@ -33,7 +33,7 @@ const domainRoots: Array<[SemanticDomainId, string[]]> = [
 
 const domainNodeIds = new Set(["fmcw", "foundation", "signal", "data", "system", "ai"]);
 const metricNodeIds = new Set(["range-resolution", "pd-pfa", "nis-nees", "enob"]);
-const phenomenonNodeIds = new Set(["range-doppler-coupling", "phase-noise", "spurs", "multipath", "domain-shift"]);
+const problemNodeIds = new Set(["range-doppler-coupling", "phase-noise", "spurs", "multipath", "domain-shift"]);
 const modelNodeIds = new Set(["motion-models", "extended-dense"]);
 const algorithmNodeIds = new Set([
   "dbscan", "kmeans", "meanshift", "optics", "gnn", "jpda", "kf-family", "imm",
@@ -49,7 +49,7 @@ const methodNodeIds = new Set([
 function nodeTypeFor(id: string): NodeType {
   if (domainNodeIds.has(id)) return "domain";
   if (metricNodeIds.has(id)) return "metric";
-  if (phenomenonNodeIds.has(id)) return "phenomenon";
+  if (problemNodeIds.has(id)) return "problem";
   if (modelNodeIds.has(id)) return "model";
   if (algorithmNodeIds.has(id)) return "algorithm";
   if (methodNodeIds.has(id)) return "method";

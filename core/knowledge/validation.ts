@@ -48,6 +48,38 @@ export function validateKnowledgeDataset(dataset: KnowledgeDataset): ValidationR
       if (legacyIds.has(node.legacyId)) add("error", "DUPLICATE_LEGACY_ID", `重复 legacyId ${node.legacyId}`, node.id);
       legacyIds.add(node.legacyId);
     }
+    // 节点粒度硬约束审查（由节点类型决定，一个节点只放一个东西）
+    const granularTypes = ["concept", "method", "algorithm", "problem", "model"];
+    if (granularTypes.includes(node.nodeType)) {
+      // 规则1：名称中包含并列连词，可能把多个概念放在一起
+      const parallelConjunctions = /[、\/和与及]/;
+      if (parallelConjunctions.test(node.canonicalName)) {
+        add("warning", "MULTI_CONCEPT_NODE",
+          `节点"${node.canonicalName}"名称包含并列连词，可能把多个${node.nodeType === "problem" ? "问题/现象" : "概念/方法"}放在一个节点中。应拆分为独立子节点，共享共性父节点。`,
+          node.id);
+      }
+      // 规则2：节点名称过长
+      if (node.canonicalName.length > 20) {
+        add("warning", "NODE_NAME_TOO_LONG",
+          `节点"${node.canonicalName}"名称长度 ${node.canonicalName.length} 字，建议不超过 15 字。名称应简短具体，详细描述放 shortFact 或知识卡栏目。`,
+          node.id);
+      }
+      // 规则3：shortFact 过长
+      if (node.shortFact.length > 80) {
+        add("warning", "SHORTFACT_TOO_LONG",
+          `节点"${node.canonicalName}"的 shortFact 长度 ${node.shortFact.length} 字，建议不超过 50 字。shortFact 应是一句话定义，详细原理、推导、比较放知识卡栏目。`,
+          node.id);
+      }
+    }
+    // 规则4：problem 节点不应混入解决方法（检测 shortFact 中包含方法/算法/解决/采用等词）
+    if (node.nodeType === "problem") {
+      const solutionKeywords = /(方法|算法|解决|采用|使用|通过.*实现|基于.*估计)/;
+      if (solutionKeywords.test(node.shortFact)) {
+        add("warning", "PROBLEM_NODE_HAS_SOLUTION",
+          `problem 节点"${node.canonicalName}"的 shortFact 可能混入了解决方法。problem 节点只应描述问题/现象本身（定义、原因、影响）；解决方法必须是独立的 method/algorithm 节点，通过 MITIGATES 等关系关联。`,
+          node.id);
+      }
+    }
   }
   const roots = dataset.nodes.filter((node) => node.primaryParentId === null);
   if (roots.length !== 1) add("error", "ROOT_COUNT", `必须有且只有一个根节点，当前为 ${roots.length}。`);
