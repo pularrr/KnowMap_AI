@@ -17,6 +17,9 @@ import { join } from "path";
 import type { LlmProvider, LlmMessage } from "../../core/llm/contracts";
 import { structuredOutputCall } from "../llm/structured-output";
 import type { TaskProfile } from "../../plugin/contracts/task-profile";
+import { collectAdaptiveResearch } from "./adaptive-research";
+import type { KnowledgeDataset, KnowledgeNode as DatasetNode, KnowledgeCard, KnowledgeEdge, SemanticDomain } from "../../core/knowledge/schema";
+import type { ResearchDocument } from "./research-output";
 
 /**
  * 知识节点
@@ -89,6 +92,116 @@ interface ReActObservation {
   coverageScore: number;
 }
 
+
+/**
+ * 把 KnowledgeNetwork 转换为 KnowledgeDataset（适配 collectAdaptiveResearch）
+ */
+function networkToDataset(network: KnowledgeNetwork, profile: TaskProfile): KnowledgeDataset {
+  const domains = profile.domains.map((d, i) => ({
+    id: d.id as any,
+    name: d.name,
+    description: d.description,
+    visualBranch: d.visualBranch as any,
+    order: i,
+  }));
+
+  const nodes = network.nodes.map((n) => ({
+    id: n.id,
+    canonicalName: n.canonicalName,
+    shortFact: n.shortFact,
+    nodeType: n.nodeType as any,
+    primaryParentId: n.parentId || null,
+    domainId: (n.domainId || null) as any,
+    order: n.order ?? 0,
+    visualBranch: null as any,
+    aliases: [],
+    tags: [],
+    level: 0,
+    status: "active" as any,
+  }));
+
+  const cards = network.cardBlocks.map((b, i) => ({
+    id: `card-${i}`,
+    nodeId: b.nodeId,
+    headline: b.title,
+    blocks: [{ type: b.type as any, title: b.title, contentText: b.text }],
+    formulaIds: [],
+    evidenceIds: [],
+    revision: 1,
+  }));
+
+  const edges = network.relations.map((r, i) => ({
+    id: `edge-${i}`,
+    sourceId: r.sourceId,
+    targetId: r.targetId,
+    type: r.type as any,
+    rationale: r.rationale,
+    weight: 1,
+    status: "active" as any,
+    evidenceIds: [],
+  }));
+
+  return {
+    revision: 1,
+    domains: domains as any,
+    nodes: nodes as any,
+    cards: cards as any,
+    formulas: [],
+    edges: edges as any,
+  } as KnowledgeDataset;
+}
+
+/**
+ * 把 ResearchDocument 合并到 KnowledgeNetwork
+ */
+function mergeResearchToNetwork(network: KnowledgeNetwork, doc: ResearchDocument): KnowledgeNetwork {
+  const existingNodeIds = new Set(network.nodes.map((n) => n.id));
+  const existingNodeNames = new Set(network.nodes.map((n) => n.canonicalName.toLowerCase()));
+  const existingCardKeys = new Set(network.cardBlocks.map((c) => `${c.nodeId}:${c.type}`));
+  const existingRelationKeys = new Set(network.relations.map((r) => `${r.sourceId}:${r.targetId}:${r.type}`));
+
+  // 合并新节点
+  const newNodes = doc.proposal.newNodes
+    .filter((n) => n.id && !existingNodeIds.has(n.id) && !existingNodeNames.has(n.canonicalName.toLowerCase()))
+    .map((n) => ({
+      id: n.id!,
+      canonicalName: n.canonicalName,
+      shortFact: n.shortFact,
+      nodeType: n.nodeType,
+      parentId: n.parentId || "",
+    }));
+
+  // 合并新卡片（包括节点内嵌的 blocks）
+  const allCardBlocks = [
+    ...doc.proposal.cardBlocks,
+    ...doc.proposal.newNodes.flatMap((n) => (n.blocks || []).map((b) => ({ ...b, nodeId: n.id || b.nodeId }))),
+  ];
+  const newCardBlocks = allCardBlocks
+    .filter((b) => b.nodeId && !existingCardKeys.has(`${b.nodeId}:${b.type}`))
+    .map((b) => ({
+      nodeId: b.nodeId!,
+      type: b.type,
+      title: b.title,
+      text: b.text,
+    }));
+
+  // 合并新关系
+  const newRelations = doc.proposal.relations
+    .filter((r) => !existingRelationKeys.has(`${r.sourceId}:${r.targetId}:${r.type}`))
+    .map((r) => ({
+      sourceId: r.sourceId,
+      targetId: r.targetId,
+      type: r.type,
+      rationale: r.rationale,
+    }));
+
+  return {
+    nodes: [...network.nodes, ...newNodes],
+    cardBlocks: [...network.cardBlocks, ...newCardBlocks],
+    relations: [...network.relations, ...newRelations],
+  };
+}
+
 /**
  * 知识生成器
  */
@@ -143,359 +256,203 @@ export class KnowledgeGenerator {
   }
 
   /**
-   * 初始化知识网络（创建根节点）
+   * 初始化知识网络（根节点 + 所有域节点骨架）
+   * 这样第一轮 ReAct 就有了明确的骨架，LLM 知道从哪里开始
    */
   private initializeNetwork(): KnowledgeNetwork {
     const rootNode = this.profile.initialization.rootNode;
-    return {
-      nodes: [
-        {
-          id: rootNode.id,
-          canonicalName: rootNode.name,
-          shortFact: rootNode.shortFact,
-          nodeType: "domain",
-          parentId: "",
-          order: 0,
-        },
-      ],
-      cardBlocks: [
-        {
-          nodeId: rootNode.id,
-          type: "definition",
-          title: "定义与边界",
-          text: rootNode.shortFact,
-        },
-      ],
-      relations: [],
-    };
-  }
-
-  /**
-   * 生成 ReAct 系统提示词
-   */
-  private buildReActSystemPrompt(): string {
-    const nodeTypes = this.profile.nodeTypes.map((t) => `${t.type}(${t.singular})`).join("、");
-    const edgeTypes = this.profile.edgeTypes.map((t) => `${t.type}(${t.label})`).join("、");
-    const sections = this.profile.cardSections.filter((s) => s.coverage === "core").map((s) => s.type).join("、");
-
-    return `你是采用 ReAct 的知识检索 Agent，用于生成 ${this.topic} 知识网络。
-
-【Profile 配置】
-- 节点类型：${nodeTypes}
-- 边类型：${edgeTypes}
-- 核心栏目：${sections}
-
-【ReAct 循环】
-1. Observe：观察当前知识网络的覆盖度，识别知识缺口
-2. Act：深入一个尚未解决的问题，输出一批实质知识（节点、卡片、关系）
-3. 再观察：判断新知识是否填补了缺口，是否需要继续深入
-
-【节点粒度硬约束（必须遵守）】
-1. 一个节点只放一个东西，由 nodeType 决定
-2. 禁止把多个并列概念/方法/问题放在一个节点中
-3. problem 类型节点只描述问题/现象本身，禁止混入解决方法
-4. 节点名称简短具体，不超过15字，禁止包含"、""/"和"等并列连词
-5. 节点摘要是一句话定义，不超过50字；详细内容放知识卡栏目
-
-【批量合并】
-每批累积后统一合并，不要逐条调用图内查重工具。新增节点可引用本批或此前批次新节点ID作为父级。
-
-【输出格式】
-输出 JSON：
-{
-  "nodes": [{"id": "node-id", "canonicalName": "名称", "shortFact": "一句话定义", "nodeType": "类型", "parentId": "父节点ID", "domainId": "域ID"}],
-  "cardBlocks": [{"nodeId": "节点ID", "type": "栏目类型", "title": "标题", "text": "内容"}],
-  "relations": [{"sourceId": "源节点", "targetId": "目标节点", "type": "关系类型", "rationale": "理由"}],
-  "gaps": ["仍存在的知识缺口"],
-  "converged": false
-}`;
-  }
-
-  /**
-   * 执行一次 ReAct Act（生成一批知识）
-   */
-  private async reactAct(network: KnowledgeNetwork, iteration: number): Promise<{
-    newNodes: KnowledgeNode[];
-    newCardBlocks: KnowledgeCardBlock[];
-    newRelations: KnowledgeRelation[];
-    gaps: string[];
-    converged: boolean;
-  }> {
-    const systemPrompt = this.buildReActSystemPrompt();
-
-    // 构建当前网络摘要（限制输入大小）
-    const nodeSummary = network.nodes.slice(0, 50).map((n) => `${n.id}(${n.nodeType}): ${n.canonicalName}`).join("\n");
-    const domainSummary = this.profile.domains.map((d) => `${d.id}: ${d.name}`).join("\n");
-
-    const userPrompt = `【当前迭代】第 ${iteration + 1} 轮，共最多 ${this.maxIterations} 轮
-
-【目标节点数】${this.targetNodeCount[0]}-${this.targetNodeCount[1]} 个
-【当前节点数】${network.nodes.length} 个
-
-【语义域】
-${domainSummary}
-
-【当前知识网络（前50个节点）】
-${nodeSummary}
-
-【任务】
-请观察当前知识网络的覆盖度，识别知识缺口，然后 Act 生成一批新知识填补缺口。
-
-${this.mode === "mvp" ? "【MVP模式】只生成核心概念，只填 definition 栏目，目标 15-30 个节点。" : "【完整开发模式】生成深入的知识网络，填 5+ 栏目，目标 80-150 个节点。"}
-
-如果知识网络已经足够完整，设置 converged=true。`;
-
-    const result = await this.callStructured(
-      systemPrompt,
-      userPrompt,
-      (data) => {
-        if (!data || typeof data !== "object") {
-          throw new Error("ReAct 输出必须是对象");
-        }
-        const obj = data as Record<string, unknown>;
-        return {
-          newNodes: (obj.nodes as KnowledgeNode[]) || [],
-          newCardBlocks: (obj.cardBlocks as KnowledgeCardBlock[]) || [],
-          newRelations: (obj.relations as KnowledgeRelation[]) || [],
-          gaps: (obj.gaps as string[]) || [],
-          converged: obj.converged === true,
-        };
+    const nodes: KnowledgeNode[] = [
+      {
+        id: rootNode.id,
+        canonicalName: rootNode.name,
+        shortFact: rootNode.shortFact,
+        nodeType: "domain",
+        parentId: "",
+        order: 0,
       },
-      16384
-    );
+    ];
+    const cardBlocks: KnowledgeCardBlock[] = [
+      {
+        nodeId: rootNode.id,
+        type: "definition",
+        title: "定义与边界",
+        text: rootNode.shortFact,
+      },
+    ];
+    const relations: KnowledgeRelation[] = [];
 
-    return result;
-  }
-
-  /**
-   * 分布式子调用（当 gaps 较多时拆分任务）
-   */
-  private async distributedGenerate(
-    network: KnowledgeNetwork,
-    gaps: string[],
-    iteration: number
-  ): Promise<{
-    newNodes: KnowledgeNode[];
-    newCardBlocks: KnowledgeCardBlock[];
-    newRelations: KnowledgeRelation[];
-  }> {
-    // 分布式触发条件：gaps > 3 或 新节点候选 > 8
-    const shouldDistribute = gaps.length > 3 || network.nodes.length > 30;
-
-    if (!shouldDistribute) {
-      // 单次调用
-      const result = await this.reactAct(network, iteration);
-      return {
-        newNodes: result.newNodes,
-        newCardBlocks: result.newCardBlocks,
-        newRelations: result.newRelations,
-      };
-    }
-
-    // 分布式：按每组 2 个 gap 拆分，最多 2 组
-    this.distributedCalls++;
-    const maxGroups = 2;
-    const groupSize = 2;
-    const groups: string[][] = [];
-
-    for (let i = 0; i < gaps.length && groups.length < maxGroups; i += groupSize) {
-      groups.push(gaps.slice(i, i + groupSize));
-    }
-
-    let allNewNodes: KnowledgeNode[] = [];
-    let allNewCardBlocks: KnowledgeCardBlock[] = [];
-    let allNewRelations: KnowledgeRelation[] = [];
-
-    // 并行执行各组（实际生产中应限制并发）
-    const promises = groups.map(async (groupGaps, groupIndex) => {
-      const groupNetwork = { ...network, nodes: [...network.nodes] };
-      const result = await this.reactAct(groupNetwork, iteration + groupIndex * 0.1);
-      return result;
+    // 创建所有域节点作为骨架
+    this.profile.domains.forEach((domain, index) => {
+      const domainNodeId = domain.id;
+      nodes.push({
+        id: domainNodeId,
+        canonicalName: domain.name,
+        shortFact: domain.description,
+        nodeType: "domain",
+        parentId: rootNode.id,
+        domainId: domain.id,
+        order: index + 1,
+      });
+      cardBlocks.push({
+        nodeId: domainNodeId,
+        type: "definition",
+        title: "定义与边界",
+        text: domain.description,
+      });
+      // 根节点到域节点的 PART_OF 关系
+      relations.push({
+        sourceId: rootNode.id,
+        targetId: domainNodeId,
+        type: "PART_OF",
+        rationale: `${domain.name} 是 ${rootNode.name} 的一个语义域`,
+      });
     });
 
-    const results = await Promise.all(promises);
-
-    for (const result of results) {
-      allNewNodes = [...allNewNodes, ...result.newNodes];
-      allNewCardBlocks = [...allNewCardBlocks, ...result.newCardBlocks];
-      allNewRelations = [...allNewRelations, ...result.newRelations];
-    }
-
-    this.warnings.push(`分布式子调用：拆分为 ${groups.length} 组，每组 ${groupSize} 个 gap`);
-
-    return {
-      newNodes: allNewNodes,
-      newCardBlocks: allNewCardBlocks,
-      newRelations: allNewRelations,
-    };
-  }
-
-  /**
-   * 批量合并新知识到现有网络（去重）
-   */
-  private mergeKnowledge(
-    network: KnowledgeNetwork,
-    newNodes: KnowledgeNode[],
-    newCardBlocks: KnowledgeCardBlock[],
-    newRelations: KnowledgeRelation[]
-  ): KnowledgeNetwork {
-    const existingNodeIds = new Set(network.nodes.map((n) => n.id));
-    const existingNodeNames = new Set(network.nodes.map((n) => n.canonicalName.toLowerCase()));
-
-    // 节点去重：按 id 和名称去重
-    const uniqueNodes = newNodes.filter((node) => {
-      if (existingNodeIds.has(node.id)) return false;
-      if (existingNodeNames.has(node.canonicalName.toLowerCase())) return false;
-      // 验证节点类型是否在 Profile 中
-      const validType = this.profile.nodeTypes.some((t) => t.type === node.nodeType);
-      if (!validType) {
-        this.warnings.push(`节点 ${node.id} 的类型 ${node.nodeType} 不在 Profile 中，已跳过`);
-        return false;
-      }
-      return true;
-    });
-
-    // 卡片去重：按 nodeId + type 去重
-    const existingCardKeys = new Set(network.cardBlocks.map((c) => `${c.nodeId}:${c.type}`));
-    const uniqueCardBlocks = newCardBlocks.filter((block) => {
-      const key = `${block.nodeId}:${block.type}`;
-      if (existingCardKeys.has(key)) return false;
-      // 只保留节点存在的卡片
-      const nodeExists = existingNodeIds.has(block.nodeId) || uniqueNodes.some((n) => n.id === block.nodeId);
-      return nodeExists;
-    });
-
-    // 关系去重：按 sourceId + targetId + type 去重
-    const existingRelationKeys = new Set(network.relations.map((r) => `${r.sourceId}:${r.targetId}:${r.type}`));
-    const uniqueRelations = newRelations.filter((relation) => {
-      const key = `${relation.sourceId}:${relation.targetId}:${relation.type}`;
-      if (existingRelationKeys.has(key)) return false;
-      // 只保留两端节点都存在的关系
-      const sourceExists = existingNodeIds.has(relation.sourceId) || uniqueNodes.some((n) => n.id === relation.sourceId);
-      const targetExists = existingNodeIds.has(relation.targetId) || uniqueNodes.some((n) => n.id === relation.targetId);
-      return sourceExists && targetExists;
-    });
-
-    return {
-      nodes: [...network.nodes, ...uniqueNodes],
-      cardBlocks: [...network.cardBlocks, ...uniqueCardBlocks],
-      relations: [...network.relations, ...uniqueRelations],
-    };
+    return { nodes, cardBlocks, relations };
   }
 
   /**
    * 执行完整的知识生成流程
+   * 真正复用 FMCW 的 collectAdaptiveResearch（逐节点 ReAct 重置、自适应预算、
+   * 上下文管理、分布式子调用、批量合并、收敛判断）
    */
   async generate(): Promise<GenerationResult> {
     this.warnings = [];
     this.distributedCalls = 0;
 
-    // 初始化
+    // Step 1: 初始化网络（根节点 + 所有域节点骨架）
     let network = this.initializeNetwork();
-    let converged = false;
-    let iteration = 0;
+    this.warnings.push(
+      `初始化完成：根节点 + ${this.profile.domains.length} 个域节点骨架，共 ${network.nodes.length} 节点`
+    );
 
-    this.warnings.push(`开始生成：模式=${this.mode}，目标节点数=${this.targetNodeCount[0]}-${this.targetNodeCount[1]}，最大迭代=${this.maxIterations}`);
+    // Step 2: 转换为 KnowledgeDataset（适配 collectAdaptiveResearch）
+    const dataset = networkToDataset(network, this.profile);
+    const rootNodeId = this.profile.initialization.rootNode.id;
+    const runId = `gen-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    // ReAct 循环
-    while (iteration < this.maxIterations && !converged) {
-      iteration++;
-
-      try {
-        // Observe：评估当前覆盖度
-        const observation = this.assessCoverage(network);
-
-        // Act + 分布式子调用
-        const actResult = await this.distributedGenerate(network, observation.gaps, iteration);
-
-        // 批量合并
-        const beforeCount = network.nodes.length;
-        network = this.mergeKnowledge(network, actResult.newNodes, actResult.newCardBlocks, actResult.newRelations);
-        const afterCount = network.nodes.length;
-        const addedCount = afterCount - beforeCount;
-
-        this.warnings.push(`第 ${iteration} 轮：新增 ${addedCount} 节点，当前共 ${afterCount} 节点`);
-
-        // 判断收敛：新增节点很少或达到目标节点数
-        if (addedCount < 2 || afterCount >= this.targetNodeCount[1]) {
-          converged = true;
-          this.warnings.push(`收敛：第 ${iteration} 轮后新增节点不足或达到目标`);
+    // Step 3: 根据模式设置预算覆盖
+    // MVP 模式：缩短预算，快速生成骨架
+    // 完整开发模式：使用 Profile 配置的完整预算
+    const budgetOverride = this.mode === "mvp"
+      ? {
+          minRounds: 2,
+          initialRounds: 3,
+          maxNodeRounds: 6,
+          maxCalls: 30,
+          maxNodes: 30,
+          minDurationMs: 0,
+          maxDurationMs: 5 * 60_000, // MVP 最多 5 分钟
         }
+      : undefined; // 完整开发模式使用默认预算（根节点 25-35 分钟）
 
-        // 判断是否需要继续
-        if (afterCount >= this.targetNodeCount[0] && this.mode === "mvp") {
-          converged = true;
-          this.warnings.push(`MVP 模式：达到最小目标节点数 ${this.targetNodeCount[0]}`);
-        }
-      } catch (error) {
-        this.warnings.push(`第 ${iteration} 轮失败：${error instanceof Error ? error.message : String(error)}`);
-        // 失败后继续下一轮，最多重试 2 次
-        if (iteration >= this.maxIterations - 1) {
-          break;
-        }
-      }
+    this.warnings.push(
+      `开始深度检索：模式=${this.mode}，目标节点数=${this.targetNodeCount[0]}-${this.targetNodeCount[1]}，` +
+      (budgetOverride ? `MVP预算覆盖：maxNodes=${budgetOverride.maxNodes}，maxDuration=${budgetOverride.maxDurationMs / 60000}分钟` : "完整开发预算（根节点25-35分钟）")
+    );
+
+    // Step 4: 调用 collectAdaptiveResearch（真正复用 FMCW 的 ReAct 机制）
+    const observations: any[] = [];
+    const doc = await collectAdaptiveResearch({
+      provider: this.provider,
+      dataset,
+      nodeId: rootNodeId,
+      query: `生成${this.topic}知识网络，覆盖${this.profile.domains.map((d) => d.name).join("、")}等领域`,
+      runId,
+      root: true,
+      observations,
+      budgetOverride,
+      profile: this.profile, // 注入 Profile 配置
+      onProgress: (msg) => {
+        this.warnings.push(msg);
+      },
+    });
+
+    // Step 5: 把 ResearchDocument 合并到 KnowledgeNetwork
+    const beforeCount = network.nodes.length;
+    network = mergeResearchToNetwork(network, doc);
+    const afterCount = network.nodes.length;
+    const addedCount = afterCount - beforeCount;
+
+    this.warnings.push(
+      `深度检索完成：新增 ${addedCount} 节点 / ${doc.proposal.cardBlocks.length} 卡片 / ${doc.proposal.relations.length} 关系，` +
+      `当前共 ${afterCount} 节点 / ${network.cardBlocks.length} 卡片 / ${network.relations.length} 关系`
+    );
+    this.warnings.push(`覆盖度评估：${doc.coverageAssessment}`);
+    if (doc.gaps.length > 0) {
+      this.warnings.push(`剩余知识缺口（${doc.gaps.length}个）：${doc.gaps.slice(0, 5).join("；")}${doc.gaps.length > 5 ? "..." : ""}`);
     }
+
+    // Step 6: 最终校验（结构校验 + 节点粒度审查）
+    const validationWarnings = this.validateNetwork(network);
+    this.warnings.push(...validationWarnings);
 
     return {
       network,
       mode: this.mode,
-      iterations: iteration,
+      iterations: observations.length,
       totalNodes: network.nodes.length,
       totalCardBlocks: network.cardBlocks.length,
       totalRelations: network.relations.length,
       distributedCalls: this.distributedCalls,
       warnings: this.warnings,
-      converged,
+      converged: doc.converged,
     };
   }
 
   /**
-   * 评估当前知识网络的覆盖度
+   * 最终校验：结构校验 + 节点粒度审查
    */
-  private assessCoverage(network: KnowledgeNetwork): ReActObservation {
-    const gaps: string[] = [];
-    const domainNodeCounts: Record<string, number> = {};
+  private validateNetwork(network: KnowledgeNetwork): string[] {
+    const warnings: string[] = [];
 
-    // 统计每个域的节点数
+    // 结构校验：边端点存在
+    const nodeIds = new Set(network.nodes.map((n) => n.id));
+    for (const rel of network.relations) {
+      if (!nodeIds.has(rel.sourceId)) {
+        warnings.push(`关系端点不存在：source=${rel.sourceId}`);
+      }
+      if (!nodeIds.has(rel.targetId)) {
+        warnings.push(`关系端点不存在：target=${rel.targetId}`);
+      }
+    }
+
+    // 节点粒度审查：多概念节点（名称含并列连词）
+    const granularTypes = ["concept", "method", "algorithm", "model", "problem", "parameter", "metric", "application"];
     for (const node of network.nodes) {
-      if (node.domainId) {
-        domainNodeCounts[node.domainId] = (domainNodeCounts[node.domainId] || 0) + 1;
+      if (!granularTypes.includes(node.nodeType)) continue;
+      // 检查名称是否含并列连词
+      if (/[、/与和及]/.test(node.canonicalName) && node.canonicalName.length > 5) {
+        warnings.push(`可能的多概念节点：${node.id}(${node.canonicalName})，建议拆分为子节点`);
+      }
+      // 检查名称是否过长
+      if (node.canonicalName.length > 20) {
+        warnings.push(`节点名称过长：${node.id}(${node.canonicalName.length}字)，建议缩短`);
+      }
+      // 检查 shortFact 是否过长
+      if (node.shortFact.length > 80) {
+        warnings.push(`节点摘要过长：${node.id}(${node.shortFact.length}字)，建议精简`);
       }
     }
 
-    // 检查每个域是否有足够节点
-    for (const domain of this.profile.domains) {
-      const count = domainNodeCounts[domain.id] || 0;
-      if (count < 2) {
-        gaps.push(`域 ${domain.name}(${domain.id}) 节点不足，当前 ${count} 个`);
+    // problem 节点是否混入解决方法
+    for (const node of network.nodes) {
+      if (node.nodeType !== "problem") continue;
+      if (/方法|算法|解决|方案|技术|模型/.test(node.shortFact)) {
+        warnings.push(`problem节点可能混入解决方法：${node.id}，建议拆分为独立的method/algorithm节点`);
       }
     }
 
-    // 检查核心栏目填充率
-    const coreSections = this.profile.cardSections.filter((s) => s.coverage === "core");
-    const nodeWithCoreSections = new Set<string>();
-    for (const block of network.cardBlocks) {
-      if (coreSections.some((s) => s.type === block.type)) {
-        nodeWithCoreSections.add(block.nodeId);
-      }
-    }
-    const coverageScore = network.nodes.length > 0 ? nodeWithCoreSections.size / network.nodes.length : 0;
-
-    if (coverageScore < 0.5) {
-      gaps.push(`核心栏目填充率低，当前 ${(coverageScore * 100).toFixed(0)}%`);
+    if (warnings.length > 0) {
+      warnings.unshift(`最终校验：发现 ${warnings.length} 个潜在问题（warning级别，不影响使用）`);
+    } else {
+      warnings.push("最终校验：通过，未发现结构或节点粒度问题");
     }
 
-    return {
-      gaps,
-      newNodeCandidates: gaps.length * 3,
-      coverageScore,
-    };
+    return warnings;
   }
 
-  /**
-   * 将知识网络写入 JSON 文件
-   */
-  writeNetworkToFile(network: KnowledgeNetwork, outputPath?: string): string {
+    writeNetworkToFile(network: KnowledgeNetwork, outputPath?: string): string {
     const filePath = outputPath || join(process.cwd(), "data", "runtime", `generated-${this.mode}-${Date.now()}.json`);
     writeFileSync(filePath, JSON.stringify(network, null, 2), "utf8");
     return filePath;

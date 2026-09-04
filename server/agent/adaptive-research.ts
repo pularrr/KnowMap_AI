@@ -5,12 +5,27 @@ import type { LlmMessage, LlmProvider } from "../../core/llm/contracts";
 import { CARD_SECTION_CATALOG } from "../../core/knowledge/card-section-catalog";
 import { executeKnowledgeTool, type KnowledgeToolObservation } from "./knowledge-tools";
 import { requestResearch, type ResearchDocument } from "./research-output";
+import type { TaskProfile } from "../../plugin/contracts/task-profile";
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
 }
+
+/**
+ * FMCW 默认 ReAct 提示词（未提供 Profile 时使用）
+ * 包含节点粒度硬约束 6 条规则
+ */
+const DEFAULT_REACT_PROMPT = `你是采用 ReAct 的知识检索 Agent。Observe 当前节点及前轮发现；判断缺口；Act 深入一个尚未解决的问题，输出一批实质知识；再观察覆盖度。优先比较同层解决方案，再深入子问题和依赖。定义、原理、假设、正反例、工程取舍、验证、实现、应用与研究均需考察。每批累积后统一合并，不要逐条调用图内查重工具。新增节点可引用本批或此前批次新节点ID作为父级。当前topic不存在于正式图谱时，cardBlocks 使用topic.id。说明无法证实的主张。只有连续多轮没有实质新增时才标记收敛。
+
+【节点粒度硬约束（必须遵守，由节点类型决定）】
+1. 一个节点只放一个东西，由 nodeType 硬编码决定：concept=一个概念，method/algorithm=一个解决方案，model=一个模型，problem=一个问题或现象，parameter=一个参数，metric=一个指标，application=一个应用场景，component=一个组件，artifact=一个制品。
+2. 禁止把多个并列概念/方法/问题放在一个节点中。反例："CV、CA、CTRV、CTRA 描述不同机动"（4个概念混在一起）。正例：父节点"运动模型" + 子节点"CV模型"、"CA模型"、"CTRV模型"、"CTRA模型"。
+3. 如果发现多个方法/概念/问题，它们必须有一个共性问题作为父节点，每个子节点只代表一个具体概念。
+4. problem 类型节点只描述问题/现象本身（定义、原因、影响），禁止混入解决方法或子问题。解决方法必须是独立的 method/algorithm 节点，通过 MITIGATES 等关系关联；子问题必须拆分为独立 problem 子节点。
+5. 节点名称（canonicalName）简短具体，不超过15字，禁止"XX研究"、"XX概述"等空泛命名，禁止名称中包含"、""/""和"等并列连词。
+6. 节点摘要（shortFact）是一句话定义，不超过50字；详细原理、推导、比较、工程取舍放知识卡栏目。`;
 
 export function researchBudget(nodeCount: number, root: boolean) {
   const sparse = nodeCount < 20;
@@ -33,9 +48,27 @@ export async function collectAdaptiveResearch(input: {
   observations: KnowledgeToolObservation[];
   budgetOverride?: Partial<ReturnType<typeof researchBudget>>;
   signal?: AbortSignal;
+  profile?: TaskProfile;  // 新增：注入 Profile 配置，未提供时使用 FMCW 默认
 }): Promise<ResearchDocument> {
   const { provider, dataset, observations } = input;
-  const budget = { ...researchBudget(dataset.nodes.length, input.root), ...input.budgetOverride };
+
+  // 从 Profile 读取配置，未提供时使用 FMCW 默认
+  const sectionMetadata = input.profile?.cardSections ?? CARD_SECTION_CATALOG;
+  const reactPrompt = input.profile?.prompts?.react ?? DEFAULT_REACT_PROMPT;
+  const budget = {
+    ...researchBudget(dataset.nodes.length, input.root),
+    ...(input.profile?.initialization && input.root
+      ? {
+          minDurationMs: (input.profile.initialization as any).full?.rootBudgetMinutes?.[0]
+            ? (input.profile.initialization as any).full.rootBudgetMinutes[0] * 60_000
+            : undefined,
+          maxDurationMs: (input.profile.initialization as any).full?.rootBudgetMinutes?.[1]
+            ? (input.profile.initialization as any).full.rootBudgetMinutes[1] * 60_000
+            : undefined,
+        }
+      : {}),
+    ...input.budgetOverride,
+  };
   const started = Date.now();
   const deadline = AbortSignal.any([AbortSignal.timeout(budget.maxDurationMs),...(input.signal ? [input.signal] : [])]);
   const target = dataset.nodes.find((node) => node.id === input.nodeId)!;
@@ -93,11 +126,11 @@ export async function collectAdaptiveResearch(input: {
         pendingNodeIndex: checkpoint.batches.flatMap((b) => b.proposal.newNodes.map((n) => ({ id:n.id || n.canonicalName, name:n.canonicalName, parentId:n.parentId }))).slice(-400),
         previousFindings: localBatches.map((b) => ({ assessment: b.coverageAssessment, gaps: b.gaps, names: b.proposal.newNodes.map((n) => n.canonicalName), blocks: b.proposal.cardBlocks.map((c) => c.title) })),
         sources: external,
-        sectionMetadata: CARD_SECTION_CATALOG,
+        sectionMetadata,
       }).slice(0, 100000) }];
       try {
         const { document } = await requestResearch(provider,
-          "你是采用 ReAct 的知识检索 Agent。Observe 当前节点及前轮发现；判断缺口；Act 深入一个尚未解决的问题，输出一批实质知识；再观察覆盖度。优先比较同层解决方案，再深入子问题和依赖。定义、原理、假设、正反例、工程取舍、验证、实现、应用与研究均需考察。每批累积后统一合并，不要逐条调用图内查重工具。新增节点可引用本批或此前批次新节点ID作为父级。当前topic不存在于正式图谱时，cardBlocks 使用topic.id。说明无法证实的主张。只有连续多轮没有实质新增时才标记收敛。\n\n【节点粒度硬约束（必须遵守，由节点类型决定）】\n1. 一个节点只放一个东西，由 nodeType 硬编码决定：concept=一个概念，method/algorithm=一个解决方案，model=一个模型，problem=一个问题或现象，parameter=一个参数，metric=一个指标，application=一个应用场景，component=一个组件，artifact=一个制品。\n2. 禁止把多个并列概念/方法/问题放在一个节点中。反例：\"CV、CA、CTRV、CTRA 描述不同机动\"（4个概念混在一起）。正例：父节点\"运动模型\" + 子节点\"CV模型\"、\"CA模型\"、\"CTRV模型\"、\"CTRA模型\"。\n3. 如果发现多个方法/概念/问题，它们必须有一个共性问题作为父节点，每个子节点只代表一个具体概念。\n4. problem 类型节点只描述问题/现象本身（定义、原因、影响），禁止混入解决方法或子问题。解决方法必须是独立的 method/algorithm 节点，通过 MITIGATES 等关系关联；子问题必须拆分为独立 problem 子节点。\n5. 节点名称（canonicalName）简短具体，不超过15字，禁止\"XX研究\"、\"XX概述\"等空泛命名，禁止名称中包含\"、\"\"/\"\"和\"等并列连词。\n6. 节点摘要（shortFact）是一句话定义，不超过50字；详细原理、推导、比较、工程取舍放知识卡栏目。", messages,
+          reactPrompt, messages,
           { onDiagnostic: report, signal: deadline, onCall: () => {
             if (outOfBudget()) throw new Error("已达到研究预算");
             checkpoint.calls++;
@@ -118,7 +151,7 @@ export async function collectAdaptiveResearch(input: {
               graphIndex: dataset.nodes.map((n) => ({ id: n.id, name: n.canonicalName, parentId: n.primaryParentId })).slice(0, 200),
               pendingNodeIndex: checkpoint.batches.flatMap((b) => b.proposal.newNodes.map((n) => ({ id:n.id || n.canonicalName, name:n.canonicalName, parentId:n.parentId }))).slice(-200),
               previousFindings: [{ assessment: document.coverageAssessment, gaps: group, names: document.proposal.newNodes.map((n) => n.canonicalName), blocks: document.proposal.cardBlocks.map((c) => c.title) }],
-              sources: external, focusGaps: group, sectionMetadata: CARD_SECTION_CATALOG,
+              sources: external, focusGaps: group, sectionMetadata,
             }).slice(0, 60000) }];
             try {
               const { document: subDoc } = await requestResearch(provider,
