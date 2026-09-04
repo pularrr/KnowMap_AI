@@ -118,30 +118,76 @@ export class ProfileDesigner {
 
   /**
    * 从 LLM 输出中提取 JSON
+   * 增加多种提取策略，提高成功率
    */
   private extractJSON(text: string): any {
-    // 尝试提取 ```json 代码块
+    if (!text || text.trim().length === 0) {
+      throw new Error("LLM 输出为空");
+    }
+
+    // 策略 1：尝试提取 ```json 代码块
     const jsonBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (jsonBlockMatch) {
       try {
-        return JSON.parse(jsonBlockMatch[1]);
+        return JSON.parse(jsonBlockMatch[1].trim());
       } catch {
         // 继续尝试其他方式
       }
     }
 
-    // 尝试提取第一个 { 到最后一个 }
+    // 策略 2：尝试提取第一个 { 到最后一个 }（支持嵌套）
     const firstBrace = text.indexOf("{");
     const lastBrace = text.lastIndexOf("}");
     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      const candidate = text.substring(firstBrace, lastBrace + 1);
       try {
-        return JSON.parse(text.substring(firstBrace, lastBrace + 1));
+        return JSON.parse(candidate);
       } catch {
-        // 继续
+        // 继续尝试
       }
     }
 
-    throw new Error("无法从 LLM 输出中提取 JSON");
+    // 策略 3：尝试提取第一个 [ 到最后一个 ]（数组）
+    const firstBracket = text.indexOf("[");
+    const lastBracket = text.lastIndexOf("]");
+    if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+      const candidate = text.substring(firstBracket, lastBracket + 1);
+      try {
+        return JSON.parse(candidate);
+      } catch {
+        // 继续尝试
+      }
+    }
+
+    // 策略 4：清理常见的 Markdown 标记后重试
+    let cleaned = text
+      .replace(/^```(?:json)?\s*/i, "")  // 去掉开头的 ```json
+      .replace(/\s*```$/, "")              // 去掉结尾的 ```
+      .replace(/^[\s\S]*?\{/, "{")         // 去掉第一个 { 之前的内容
+      .replace(/\}[\s\S]*?$/, "}");        // 去掉最后一个 } 之后的内容
+
+    try {
+      return JSON.parse(cleaned);
+    } catch {
+      // 继续
+    }
+
+    // 策略 5：尝试修复常见的 JSON 语法错误
+    try {
+      // 去掉尾随逗号
+      const fixed = cleaned
+        .replace(/,\s*([}\]])/g, "$1")
+        .replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":');
+      return JSON.parse(fixed);
+    } catch {
+      // 继续
+    }
+
+    // 所有策略都失败，打印原始输出用于调试
+    console.error("=== LLM 原始输出（前 500 字符）===");
+    console.error(text.substring(0, 500));
+    console.error("=== LLM 原始输出结束 ===");
+    throw new Error(`无法从 LLM 输出中提取 JSON。输出长度: ${text.length}，前 100 字符: ${text.substring(0, 100)}`);
   }
 
   /**
@@ -157,7 +203,7 @@ export class ProfileDesigner {
 - 域划分要覆盖主题的主要方面，避免重叠
 - 参考 FMCW 雷达的域划分：physical-performance / waveform-if / nonideal-calibration / spectral-rva / detection-measurement / clustering-object / estimation / association-tracking / scene-events / system-hardware / ai-learning
 
-输出 JSON 格式：
+输出 JSON 格式（必须是纯 JSON，不要包含 Markdown 标记、代码块标记或解释文本，直接输出 JSON 对象）：
 {
   "domains": [
     {"id": "domain-id", "name": "域名称", "description": "描述", "visualBranch": "branch-name", "order": 1}
@@ -170,20 +216,47 @@ export class ProfileDesigner {
 
 请设计这个知识网络的语义域划分和视觉分支。`;
 
-    const response = await this.callLLM(systemPrompt, userPrompt);
-    const result = this.extractJSON(response);
+    // 重试机制：最多 2 次重试
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await this.callLLM(systemPrompt, userPrompt);
+        const result = this.extractJSON(response);
 
-    if (!result.domains || !Array.isArray(result.domains)) {
-      throw new Error("域划分设计失败：缺少 domains 数组");
-    }
-    if (!result.visualBranches || !Array.isArray(result.visualBranches)) {
-      throw new Error("域划分设计失败：缺少 visualBranches 数组");
+        // 调试输出：打印提取的 JSON 结构
+        console.log(`[ProfileDesigner] designDomains 尝试 ${attempt + 1}，提取的 keys:`, Object.keys(result));
+        console.log(`[ProfileDesigner] designDomains 结果:`, JSON.stringify(result).substring(0, 300));
+
+        if (result.domains && Array.isArray(result.domains) && result.visualBranches && Array.isArray(result.visualBranches)) {
+          return {
+            domains: result.domains,
+            visualBranches: result.visualBranches,
+          };
+        }
+
+        // 如果 domains 不存在，检查是否有其他字段包含域信息
+        if (!result.domains) {
+          const possibleDomainKeys = Object.keys(result).filter((k) =>
+            k.toLowerCase().includes("domain") || k.toLowerCase().includes("field") || k.toLowerCase().includes("area")
+          );
+          if (possibleDomainKeys.length > 0) {
+            console.log(`[ProfileDesigner] 找到可能的域字段:`, possibleDomainKeys);
+            const domains = result[possibleDomainKeys[0]];
+            if (Array.isArray(domains)) {
+              const branches = result.visualBranches || result.branches || ["default"];
+              return { domains, visualBranches: Array.isArray(branches) ? branches : [branches] };
+            }
+          }
+        }
+
+        lastError = new Error(`域划分设计失败：缺少 domains 数组。提取的 keys: ${Object.keys(result).join(", ")}`);
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        console.error(`[ProfileDesigner] designDomains 尝试 ${attempt + 1} 失败:`, lastError.message);
+      }
     }
 
-    return {
-      domains: result.domains,
-      visualBranches: result.visualBranches,
-    };
+    throw lastError || new Error("域划分设计失败");
   }
 
   /**
