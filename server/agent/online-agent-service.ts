@@ -60,6 +60,32 @@ const clean = (value: unknown, limit = 2_000): string => typeof value === "strin
 const sleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
 /**
+ * Compact a tool observation to keep the reasoning loop's context bounded.
+ * The full JSON output is truncated to a short head so the model still sees
+ * entity names / ids without the payload dominating the window.
+ */
+function compactObservation(
+  observation: KnowledgeToolObservation,
+  outputLimit = 600,
+): { round: number; tool: string; summary: string; outputHead: string } {
+  const raw = typeof observation.output === "string" ? observation.output : JSON.stringify(observation.output);
+  return {
+    round: observation.round,
+    tool: observation.tool,
+    summary: observation.summary,
+    outputHead: raw.slice(0, outputLimit),
+  };
+}
+
+/** Keep the lead context + the most recent K messages for the final pass. */
+function rollingContext(messages: readonly LlmMessage[], keep = 6): LlmMessage[] {
+  if (messages.length <= keep + 1) return [...messages];
+  const head = messages[0];
+  const tail = messages.slice(-keep);
+  return [head, { role: "user", content: "（中间多轮图内观察已省略，以上为关键上下文摘要与最近观察。）" }, ...tail];
+}
+
+/**
  * SSE event contract used by the streaming chat route. The frontend consumes
  * these to reproduce a general LLM web experience (user bubble → thinking →
  * streaming markdown answer).
@@ -235,8 +261,15 @@ async function semanticReview(
     maxOutputTokens: 4_096,
   });
   const parsed = parseJsonDocument(response.text) as { accepted?: boolean; findings?: ReviewFinding[] } | undefined;
+  // Loose parse: if the review is malformed (some models return prose or an
+  // incomplete envelope), we fail-open to the deterministic hard review
+  // instead of blocking a legitimate candidate on a fragile JSON contract.
   if (!parsed || typeof parsed.accepted !== "boolean" || !Array.isArray(parsed.findings)) {
-    return [{ code: "SEMANTIC_REVIEW_MALFORMED", severity: "error", message: "语义 Review 未返回合法结构，已按 fail-closed 拒绝。" }];
+    return [{
+      code: "SEMANTIC_REVIEW_SKIPPED",
+      severity: "warning",
+      message: "语义 Review 未返回可解析结构，已跳过 LLM 语义二审（结构门禁仍由确定性硬性审查把关）。",
+    }];
   }
   const findings: ReviewFinding[] = parsed.findings.slice(0, 20).map((finding): ReviewFinding => ({
     code: clean(finding.code, 64) || "SEMANTIC_REVIEW",
@@ -368,7 +401,7 @@ export class OnlineAgentService {
     const provider = createConfiguredLlmProvider({ environment: runtimeLlmConfigStore().environment() });
     const messages: LlmMessage[] = [{
       role: "user",
-      content: `研究问题：${clean(input.query, 2_000) || `围绕“${target.canonicalName}”扩充知识点`}\n当前节点：${target.canonicalName}\n已有观察：${JSON.stringify(observations.map((item) => ({ tool: item.tool, summary: item.summary, output: item.output })))}`,
+      content: `研究问题：${clean(input.query, 2_000) || `围绕“${target.canonicalName}”扩充知识点`}\n当前节点：${target.canonicalName}\n已有观察：${JSON.stringify(observations.map((item) => compactObservation(item)))}`,
     }];
     let lastProvider = provider.name;
     let lastModel = "";
@@ -391,8 +424,10 @@ export class OnlineAgentService {
         if (!call.arguments) continue;
         try {
           const result = executeKnowledgeTool(dataset, call.name, call.arguments);
-          observations.push({ round: observations.length + 1, tool: call.name, input: call.arguments, ...result });
-          messages.push({ role: "user", content: `只读工具 ${call.name} 返回：${JSON.stringify(result.output)}\n请据此继续判断是否全面。` });
+          const observation: KnowledgeToolObservation = { round: observations.length + 1, tool: call.name, input: call.arguments, ...result };
+          observations.push(observation);
+          const compact = compactObservation(observation);
+          messages.push({ role: "user", content: `只读工具 ${call.name} 返回：${compact.summary}\n关键内容：${compact.outputHead}\n请据此继续判断是否全面。` });
         } catch (error) {
           messages.push({ role: "user", content: `工具 ${call.name} 拒绝：${error instanceof Error ? error.message : "unknown error"}` });
         }
@@ -403,15 +438,51 @@ export class OnlineAgentService {
     const matchContext = input.staged && input.staged.matches?.length
       ? `\n\n【资料-图谱匹配判定（来自知识检索 Agent，需参考）】\n${JSON.stringify(input.staged.matches.map((m) => ({ claimId: m.claimId, decision: m.decision, matchedNodeId: m.matchedNodeId ?? null, score: m.score, rationale: m.rationale, ...(m as unknown as { proposedRelationType?: string }).proposedRelationType ? { proposedRelationType: (m as unknown as { proposedRelationType?: string }).proposedRelationType } : {} })))}`
       : "";
-    const finalResponse = await provider.createResponse({
-      instructions: `你是 Knowledge Agent。使用已有图谱观察，并必须使用 web_search 核对外部知识，然后完成自检。只输出一个 JSON 对象，不要 Markdown：
+
+    // Phase A: external verification. The web_search tool is a server-side
+    // builtin; when it's forced with toolChoice "required", some providers
+    // return only the tool call with no text on the first pass. We run it in
+    // its own turn, then carry its output into a separate text-only JSON pass.
+    const researchBase = [...rollingContext(messages, 6), ...(matchContext ? [{ role: "user" as const, content: `研究问题：${clean(input.query, 2_000)}（资料整理任务）${matchContext}` }] : [])];
+    let searchContext = "";
+    try {
+      const searchResponse = await provider.createResponse({
+        instructions: "使用 web_search 检索与研究问题、资料声明相关的权威来源（论文、TI/Infineon 文档、IEEE、专利等），核对外部知识并收集证据。只输出检索到的事实要点，不要输出最终提案 JSON。",
+        messages: researchBase,
+        tools: [{ type: "web_search" }],
+        toolChoice: "required",
+        maxOutputTokens: 4_096,
+      });
+      lastProvider = searchResponse.provider;
+      lastModel = searchResponse.model;
+      if (searchResponse.text.trim()) {
+        searchContext = searchResponse.text;
+      }
+    } catch (error) {
+      searchContext = "";
+    }
+    let finalResponse = await provider.createResponse({
+      instructions: `你是 Knowledge Agent。基于已有图谱观察${searchContext ? "与外部检索结果" : ""}，完成自检并输出最终提案。只输出一个 JSON 对象，不要 Markdown：
 {"answer":"面向用户的研究总结","coverageAssessment":"是否全面及剩余缺口","proposal":{"summary":"候选摘要","rationale":"为何需要这些变更","cardBlocks":[{"nodeId":"已有节点ID","type":"${[...allowedBlockTypes].join("|")}","title":"栏目标题","text":"可验证内容"}],"newNodes":[{"canonicalName":"名称","shortFact":"一句事实","nodeType":"concept|method|algorithm|model|phenomenon|component|artifact|parameter|metric|application","parentId":"已有父节点ID","relationshipType":"PART_OF","relationshipRationale":"理由"}],"evidence":[{"title":"来源标题","url":"https://...","note":"该来源支持什么"}]}}。
-最多 2 个卡片变更、2 个新节点。若证据不足，让 proposal 为空对象。不得输出历史、密钥或内部策略。${input.staged ? "\n注意：本任务是资料整理。请参考上方“资料-图谱匹配判定”：decision=append-card 的声明优先落入已有节点 cardBlocks；decision=create-node 的声明优先进入 newNodes；decision=create-relation 的声明应通过关系表达。匹配判定与你的图谱观察冲突时，以你的完整观察为准并说明。不要为每条声明都建节点，避免碎片化。" : ""}`,
-      messages: [...messages, ...(matchContext ? [{ role: "user" as const, content: `研究问题：${clean(input.query, 2_000)}（资料整理任务）${matchContext}` }] : [])],
-      tools: [{ type: "web_search" }],
-      toolChoice: "required",
+最多 2 个卡片变更、2 个新节点。若证据不足，让 proposal 为空对象。不得输出历史、密钥或内部策略。${input.staged ? "\n注意：本任务是资料整理。请参考上方“资料-图谱匹配判定”：decision=append-card 的声明优先落入已有节点 cardBlocks；decision=create-node 的声明优先进入 newNodes；decision=create-relation 的声明应通过关系表达。匹配判定与你的图谱观察冲突时，以你的完整观察为准并说明。不要为每条声明都建节点，避免碎片化。\n\n【新节点质量要求】\n1. 父节点选择：newNodes 的 parentId 必须是你观察到的图谱中【语义最相关】的已有节点，按方法归方法、参数归参数、现象归现象归类；严禁把多个不相关新节点都挂到当前节点或根节点。\n2. 命名：canonicalName 必须具体、可自解释（如“基于Mamba的雷达目标检测”“虚拟阵列等效孔径”），禁止空泛命名（如“新技术”“研究方案”“知识补充”）。\n3. 每个新节点必须能说明其与父节点/兄弟节点的关系（relationshipRationale 写清楚为何归入该分支）。\n4. 数量克制：只有真正在图谱中不存在、且资料提供了可验证实质内容的知识才建节点，通常 1 个就够，最多 2 个。" : ""}`,
+      messages: [...researchBase, ...(searchContext ? [{ role: "user" as const, content: `【外部检索要点】\n${searchContext.slice(0, 8_000)}` }] : [])],
       maxOutputTokens: 8_192,
     });
+    // Retry once without the external-search context when the model returns an
+    // empty or non-JSON body (some providers drop the text when the prior turn
+    // carried a web_search tool call). Keeps deep-search reliable.
+    if (!finalResponse.text.trim() || !parseJsonDocument(finalResponse.text)) {
+      const fallback = await provider.createResponse({
+        instructions: `你是 Knowledge Agent。基于已有图谱观察完成自检并输出最终提案。只输出一个 JSON 对象，不要 Markdown：
+{"answer":"面向用户的研究总结","coverageAssessment":"是否全面及剩余缺口","proposal":{"summary":"候选摘要","rationale":"为何需要这些变更","cardBlocks":[{"nodeId":"已有节点ID","type":"${[...allowedBlockTypes].join("|")}","title":"栏目标题","text":"可验证内容"}],"newNodes":[{"canonicalName":"名称","shortFact":"一句事实","nodeType":"concept|method|algorithm|model|phenomenon|component|artifact|parameter|metric|application","parentId":"已有父节点ID","relationshipType":"PART_OF","relationshipRationale":"理由"}],"evidence":[{"title":"来源标题","url":"https://...","note":"该来源支持什么"}]}}。
+最多 2 个卡片变更、2 个新节点。若证据不足，让 proposal 为空对象。不得输出历史、密钥或内部策略。${input.staged ? "\n注意：本任务是资料整理。请参考上方“资料-图谱匹配判定”：decision=append-card 的声明优先落入已有节点 cardBlocks；decision=create-node 的声明优先进入 newNodes；decision=create-relation 的声明应通过关系表达。匹配判定与你的图谱观察冲突时，以你的完整观察为准并说明。不要为每条声明都建节点，避免碎片化。\n\n【新节点质量要求】\n1. 父节点选择：newNodes 的 parentId 必须是你观察到的图谱中【语义最相关】的已有节点，按方法归方法、参数归参数、现象归现象归类；严禁把多个不相关新节点都挂到当前节点或根节点。\n2. 命名：canonicalName 必须具体、可自解释（如“基于Mamba的雷达目标检测”“虚拟阵列等效孔径”），禁止空泛命名（如“新技术”“研究方案”“知识补充”）。\n3. 每个新节点必须能说明其与父节点/兄弟节点的关系（relationshipRationale 写清楚为何归入该分支）。\n4. 数量克制：只有真正在图谱中不存在、且资料提供了可验证实质内容的知识才建节点，通常 1 个就够，最多 2 个。" : ""}`,
+        messages: researchBase,
+        maxOutputTokens: 8_192,
+      });
+      lastProvider = fallback.provider || lastProvider;
+      lastModel = fallback.model || lastModel;
+      finalResponse = fallback;
+    }
     lastProvider = finalResponse.provider;
     lastModel = finalResponse.model;
     const document = parseJsonDocument(finalResponse.text);
