@@ -1,4 +1,19 @@
 import type { EdgeType, KnowledgeDataset, KnowledgeEdge } from "./schema";
+import type { TaskProfile } from "../../plugin/contracts/task-profile";
+
+/**
+ * 验证配置选项
+ *
+ * P3-2 Step4：支持从 Profile 读取主题相关的验证配置（域数量、视觉分支数量）。
+ * 未提供 Profile 时使用 FMCW 默认值（11 域、5 分支），保持向后兼容。
+ */
+export interface ValidationOptions {
+  profile?: TaskProfile;
+  /** 域数量覆盖（优先于 profile.validation.domainCount） */
+  domainCount?: number;
+  /** 视觉分支数量覆盖 */
+  visualBranchCount?: number;
+}
 
 export interface ValidationIssue {
   severity: "error" | "warning";
@@ -22,19 +37,24 @@ function edgeKey(edge: KnowledgeEdge): string {
   return `${edge.type}:${left}:${right}`;
 }
 
-export function validateKnowledgeDataset(dataset: KnowledgeDataset): ValidationReport {
+export function validateKnowledgeDataset(dataset: KnowledgeDataset, options?: ValidationOptions): ValidationReport {
   const issues: ValidationIssue[] = [];
   const add = (severity: ValidationIssue["severity"], code: string, message: string, entityId?: string) =>
     issues.push({ severity, code, message, entityId });
+
+  // P3-2 Step4：从 Profile 或 options 读取主题相关的验证配置
+  // 未提供时使用 FMCW 默认值（11 域、5 分支），保持向后兼容
+  const expectedDomainCount = options?.domainCount ?? options?.profile?.validation.domainCount ?? 11;
+  const expectedVisualBranchCount = options?.visualBranchCount ?? options?.profile?.validation.visualBranchCount ?? 5;
 
   const domainIds = new Set<string>();
   for (const domain of dataset.domains) {
     if (domainIds.has(domain.id)) add("error", "DUPLICATE_DOMAIN", `重复领域 ${domain.id}`, domain.id);
     domainIds.add(domain.id);
   }
-  if (domainIds.size !== 11) add("error", "DOMAIN_COUNT", `应有 11 个语义领域，当前为 ${domainIds.size} 个。`);
+  if (domainIds.size !== expectedDomainCount) add("error", "DOMAIN_COUNT", `应有 ${expectedDomainCount} 个语义领域，当前为 ${domainIds.size} 个。`);
   const visualBranches = new Set(dataset.domains.map((domain) => domain.visualBranch));
-  if (visualBranches.size !== 5) add("error", "VISUAL_BRANCH_COUNT", `应映射到 5 个视觉分支，当前为 ${visualBranches.size} 个。`);
+  if (visualBranches.size !== expectedVisualBranchCount) add("error", "VISUAL_BRANCH_COUNT", `应映射到 ${expectedVisualBranchCount} 个视觉分支，当前为 ${visualBranches.size} 个。`);
 
   const nodeById = new Map<string, (typeof dataset.nodes)[number]>();
   const legacyIds = new Set<string>();
