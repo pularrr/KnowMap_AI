@@ -203,7 +203,14 @@ export class ProfileDesigner {
 - 域划分要覆盖主题的主要方面，避免重叠
 - 参考 FMCW 雷达的域划分：physical-performance / waveform-if / nonideal-calibration / spectral-rva / detection-measurement / clustering-object / estimation / association-tracking / scene-events / system-hardware / ai-learning
 
-输出 JSON 格式（必须是纯 JSON，不要包含 Markdown 标记、代码块标记或解释文本，直接输出 JSON 对象）：
+输出要求（必须严格遵守）：
+1. 直接输出 JSON 对象，不要包含任何思考、解释、前缀或后缀文本
+2. 不要使用 Markdown 代码块标记（三个反引号包裹）
+3. 不要说"好的"、"以下是"等过渡语
+4. 输出的第一个字符必须是 {，最后一个字符必须是 }
+5. JSON 必须是合法的，可以直接被 JSON.parse 解析
+
+JSON 格式：
 {
   "domains": [
     {"id": "domain-id", "name": "域名称", "description": "描述", "visualBranch": "branch-name", "order": 1}
