@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { KnowledgeGenerator } from "../../../../server/agent/knowledge-generator";
 import { FMCW_PROFILE } from "../../../../profiles/fmcw-radar";
+import { createConfiguredLlmProvider } from "../../../../server/llm/provider-factory";
 import type { TaskProfile } from "../../../../plugin/contracts/task-profile";
 
 export const runtime = "nodejs";
@@ -42,7 +43,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const generator = new KnowledgeGenerator(topic, profile, mode);
+    // 使用统一的 LlmProvider（自动处理推理模型兼容、tool_choice 剥离等）
+    const provider = createConfiguredLlmProvider();
+    const generator = new KnowledgeGenerator(provider, topic, profile, mode);
     const result = await generator.generate();
 
     let filePath: string | undefined;

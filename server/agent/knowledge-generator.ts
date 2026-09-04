@@ -14,16 +14,9 @@
 
 import { readFileSync, writeFileSync } from "fs";
 import { join } from "path";
+import type { LlmProvider, LlmMessage } from "../../core/llm/contracts";
+import { structuredOutputCall } from "../llm/structured-output";
 import type { TaskProfile } from "../../plugin/contracts/task-profile";
-
-/**
- * LLM 配置
- */
-interface LLMConfig {
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-}
 
 /**
  * 知识节点
@@ -100,7 +93,7 @@ interface ReActObservation {
  * 知识生成器
  */
 export class KnowledgeGenerator {
-  private llmConfig: LLMConfig;
+  private provider: LlmProvider;
   private profile: TaskProfile;
   private topic: string;
   private mode: GenerationMode;
@@ -109,11 +102,11 @@ export class KnowledgeGenerator {
   private warnings: string[] = [];
   private distributedCalls: number = 0;
 
-  constructor(topic: string, profile: TaskProfile, mode: GenerationMode = "mvp") {
+  constructor(provider: LlmProvider, topic: string, profile: TaskProfile, mode: GenerationMode = "mvp") {
+    this.provider = provider;
     this.topic = topic;
     this.profile = profile;
     this.mode = mode;
-    this.llmConfig = this.loadLLMConfig();
 
     // 根据模式设置参数
     if (mode === "mvp") {
@@ -126,79 +119,27 @@ export class KnowledgeGenerator {
   }
 
   /**
-   * 加载 LLM 配置
+   * 通用结构化输出调用封装
    */
-  private loadLLMConfig(): LLMConfig {
-    try {
-      const configPath = join(process.cwd(), "data", "runtime", "llm-config.json");
-      const config = JSON.parse(readFileSync(configPath, "utf8"));
-      return {
-        apiKey: config.apiKey,
-        baseUrl: config.baseUrl,
-        model: config.model,
-      };
-    } catch {
-      return {
-        apiKey: process.env.LLM_API_KEY || "",
-        baseUrl: process.env.LLM_BASE_URL || "https://api.deepseek.com",
-        model: process.env.LLM_MODEL || "deepseek-chat",
-      };
-    }
-  }
-
-  /**
-   * 调用 LLM
-   */
-  private async callLLM(systemPrompt: string, userPrompt: string): Promise<string> {
-    const response = await fetch(`${this.llmConfig.baseUrl}/responses`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.llmConfig.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.llmConfig.model,
-        input: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-      }),
+  private async callStructured<T>(
+    instructions: string,
+    userContent: string,
+    validator: (data: unknown) => T,
+    maxOutputTokens: number = 8192
+  ): Promise<T> {
+    const messages: LlmMessage[] = [{ role: "user", content: userContent }];
+    const result = await structuredOutputCall(this.provider, instructions, messages, validator, {
+      maxOutputTokens,
+      maxRetries: 3,
+      onDiagnostic: (msg) => this.warnings.push(msg),
     });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`LLM 调用失败: ${response.status} ${errorText}`);
+    if (result.attempts > 1) {
+      this.warnings.push(`LLM 调用重试 ${result.attempts - 1} 次后成功`);
     }
-
-    const data = await response.json();
-    const outputText = data.output?.[0]?.content?.[0]?.text || data.output_text || "";
-    return outputText;
-  }
-
-  /**
-   * 从 LLM 输出中提取 JSON
-   */
-  private extractJSON(text: string): any {
-    const jsonBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonBlockMatch) {
-      try {
-        return JSON.parse(jsonBlockMatch[1]);
-      } catch {
-        // 继续
-      }
+    if (result.recoveredFromIncomplete) {
+      this.warnings.push("从不完整输出中恢复结构化数据");
     }
-
-    const firstBrace = text.indexOf("{");
-    const lastBrace = text.lastIndexOf("}");
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      try {
-        return JSON.parse(text.substring(firstBrace, lastBrace + 1));
-      } catch {
-        // 继续
-      }
-    }
-
-    throw new Error("无法从 LLM 输出中提取 JSON");
+    return result.data;
   }
 
   /**
@@ -304,16 +245,26 @@ ${this.mode === "mvp" ? "【MVP模式】只生成核心概念，只填 definitio
 
 如果知识网络已经足够完整，设置 converged=true。`;
 
-    const response = await this.callLLM(systemPrompt, userPrompt);
-    const result = this.extractJSON(response);
+    const result = await this.callStructured(
+      systemPrompt,
+      userPrompt,
+      (data) => {
+        if (!data || typeof data !== "object") {
+          throw new Error("ReAct 输出必须是对象");
+        }
+        const obj = data as Record<string, unknown>;
+        return {
+          newNodes: (obj.nodes as KnowledgeNode[]) || [],
+          newCardBlocks: (obj.cardBlocks as KnowledgeCardBlock[]) || [],
+          newRelations: (obj.relations as KnowledgeRelation[]) || [],
+          gaps: (obj.gaps as string[]) || [],
+          converged: obj.converged === true,
+        };
+      },
+      16384
+    );
 
-    return {
-      newNodes: result.nodes || [],
-      newCardBlocks: result.cardBlocks || [],
-      newRelations: result.relations || [],
-      gaps: result.gaps || [],
-      converged: result.converged || false,
-    };
+    return result;
   }
 
   /**

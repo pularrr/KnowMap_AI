@@ -1,7 +1,12 @@
 /**
- * Profile 设计器（LLM 驱动）
+ * Profile 设计器（LLM 驱动）- 重构版
  *
  * P3-3：通用 LLM 根据用户的任务描述，自动设计一个完整的 TaskProfile。
+ *
+ * 重构说明：
+ * - 原实现直接用 fetch 调用 /responses API + extractJSON 解析文本
+ * - 重构后使用 LlmProvider 统一接口 + structuredOutputCall 通用函数
+ * - 自动处理推理模型兼容、tool_choice 剥离、重试、repair、incomplete 等
  *
  * 设计流程：
  * 1. 域划分设计：LLM 设计 3-8 个语义域和 3-5 个视觉分支
@@ -15,6 +20,8 @@
 
 import { readFileSync, writeFileSync } from "fs";
 import { join } from "path";
+import type { LlmProvider, LlmMessage } from "../../core/llm/contracts";
+import { structuredOutputCall } from "../llm/structured-output";
 import type {
   TaskProfile,
   DomainDef,
@@ -24,15 +31,6 @@ import type {
   PromptConfig,
 } from "../../plugin/contracts/task-profile";
 import { BASE_NODE_TYPES, BASE_EDGE_TYPES } from "../../plugin/contracts/task-profile";
-
-/**
- * LLM 配置
- */
-interface LLMConfig {
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-}
 
 /**
  * Profile 设计结果
@@ -45,232 +43,154 @@ export interface ProfileDesignResult {
 }
 
 /**
- * 设计步骤
+ * 域划分校验器
  */
-type DesignStep = "domains" | "types" | "sections" | "prompts" | "initialization" | "validation";
+function validateDomains(data: unknown): { domains: DomainDef[]; visualBranches: string[] } {
+  if (!data || typeof data !== "object") {
+    throw new Error("域划分输出必须是对象");
+  }
+  const obj = data as Record<string, unknown>;
+  if (!Array.isArray(obj.domains) || obj.domains.length === 0) {
+    throw new Error("缺少 domains 数组或为空");
+  }
+  if (!Array.isArray(obj.visualBranches) || obj.visualBranches.length === 0) {
+    throw new Error("缺少 visualBranches 数组或为空");
+  }
+  // 校验每个域
+  const domains: DomainDef[] = obj.domains.map((d: unknown, i: number) => {
+    if (!d || typeof d !== "object") {
+      throw new Error(`域 ${i} 必须是对象`);
+    }
+    const domain = d as Record<string, unknown>;
+    if (!domain.id || typeof domain.id !== "string") {
+      throw new Error(`域 ${i} 缺少 id`);
+    }
+    if (!domain.name || typeof domain.name !== "string") {
+      throw new Error(`域 ${i} 缺少 name`);
+    }
+    return {
+      id: domain.id,
+      name: domain.name,
+      description: typeof domain.description === "string" ? domain.description : "",
+      visualBranch: typeof domain.visualBranch === "string" ? domain.visualBranch : (obj.visualBranches as string[])[0],
+      order: typeof domain.order === "number" ? domain.order : i + 1,
+    };
+  });
+  return { domains, visualBranches: obj.visualBranches as unknown as string[] };
+}
+
+/**
+ * 类型系统校验器
+ */
+function validateTypes(data: unknown): { nodeTypes: NodeTypeDef[]; edgeTypes: EdgeTypeDef[] } {
+  if (!data || typeof data !== "object") {
+    throw new Error("类型系统输出必须是对象");
+  }
+  const obj = data as Record<string, unknown>;
+  if (!Array.isArray(obj.nodeTypes) || obj.nodeTypes.length === 0) {
+    throw new Error("缺少 nodeTypes 数组或为空");
+  }
+  if (!Array.isArray(obj.edgeTypes) || obj.edgeTypes.length === 0) {
+    throw new Error("缺少 edgeTypes 数组或为空");
+  }
+  return {
+    nodeTypes: obj.nodeTypes as NodeTypeDef[],
+    edgeTypes: obj.edgeTypes as EdgeTypeDef[],
+  };
+}
+
+/**
+ * 栏目校验器
+ */
+function validateCardSections(data: unknown): CardSectionDef[] {
+  if (!Array.isArray(data)) {
+    if (data && typeof data === "object" && Array.isArray((data as Record<string, unknown>).cardSections)) {
+      return (data as Record<string, unknown>).cardSections as CardSectionDef[];
+    }
+    throw new Error("栏目输出必须是数组");
+  }
+  if (data.length === 0) {
+    throw new Error("栏目数组为空");
+  }
+  return data as CardSectionDef[];
+}
+
+/**
+ * 提示词校验器
+ */
+function validatePrompts(data: unknown): PromptConfig {
+  if (!data || typeof data !== "object") {
+    throw new Error("提示词输出必须是对象");
+  }
+  return data as PromptConfig;
+}
 
 /**
  * Profile 设计器
  */
 export class ProfileDesigner {
-  private llmConfig: LLMConfig;
+  private provider: LlmProvider;
   private maxIterations: number = 3;
   private topic: string;
   private taskDescription: string;
+  private warnings: string[] = [];
 
-  constructor(topic: string, taskDescription: string) {
+  constructor(provider: LlmProvider, topic: string, taskDescription: string) {
+    this.provider = provider;
     this.topic = topic;
     this.taskDescription = taskDescription;
-    this.llmConfig = this.loadLLMConfig();
   }
 
   /**
-   * 加载 LLM 配置
+   * 通用结构化输出调用封装
    */
-  private loadLLMConfig(): LLMConfig {
-    try {
-      const configPath = join(process.cwd(), "data", "runtime", "llm-config.json");
-      const config = JSON.parse(readFileSync(configPath, "utf8"));
-      return {
-        apiKey: config.apiKey,
-        baseUrl: config.baseUrl,
-        model: config.model,
-      };
-    } catch {
-      // 默认配置（实际使用时应从环境变量或配置文件读取）
-      return {
-        apiKey: process.env.LLM_API_KEY || "",
-        baseUrl: process.env.LLM_BASE_URL || "https://api.deepseek.com",
-        model: process.env.LLM_MODEL || "deepseek-chat",
-      };
-    }
-  }
-
-  /**
-   * 调用 LLM
-   */
-  private async callLLM(systemPrompt: string, userPrompt: string): Promise<string> {
-    const response = await fetch(`${this.llmConfig.baseUrl}/responses`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.llmConfig.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.llmConfig.model,
-        input: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-      }),
+  private async callStructured<T>(
+    instructions: string,
+    userContent: string,
+    validator: (data: unknown) => T,
+    maxOutputTokens: number = 8192
+  ): Promise<T> {
+    const messages: LlmMessage[] = [{ role: "user", content: userContent }];
+    const result = await structuredOutputCall(this.provider, instructions, messages, validator, {
+      maxOutputTokens,
+      maxRetries: 3,
+      onDiagnostic: (msg) => this.warnings.push(msg),
     });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`LLM 调用失败: ${response.status} ${errorText}`);
+    if (result.attempts > 1) {
+      this.warnings.push(`LLM 调用重试 ${result.attempts - 1} 次后成功`);
     }
-
-    const data = await response.json();
-    // OpenAI Responses API 格式
-    const outputText = data.output?.[0]?.content?.[0]?.text || data.output_text || "";
-    return outputText;
-  }
-
-  /**
-   * 从 LLM 输出中提取 JSON
-   * 增加多种提取策略，提高成功率
-   */
-  private extractJSON(text: string): any {
-    if (!text || text.trim().length === 0) {
-      throw new Error("LLM 输出为空");
+    if (result.recoveredFromIncomplete) {
+      this.warnings.push("从不完整输出中恢复结构化数据");
     }
-
-    // 策略 1：尝试提取 ```json 代码块
-    const jsonBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonBlockMatch) {
-      try {
-        return JSON.parse(jsonBlockMatch[1].trim());
-      } catch {
-        // 继续尝试其他方式
-      }
-    }
-
-    // 策略 2：尝试提取第一个 { 到最后一个 }（支持嵌套）
-    const firstBrace = text.indexOf("{");
-    const lastBrace = text.lastIndexOf("}");
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      const candidate = text.substring(firstBrace, lastBrace + 1);
-      try {
-        return JSON.parse(candidate);
-      } catch {
-        // 继续尝试
-      }
-    }
-
-    // 策略 3：尝试提取第一个 [ 到最后一个 ]（数组）
-    const firstBracket = text.indexOf("[");
-    const lastBracket = text.lastIndexOf("]");
-    if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
-      const candidate = text.substring(firstBracket, lastBracket + 1);
-      try {
-        return JSON.parse(candidate);
-      } catch {
-        // 继续尝试
-      }
-    }
-
-    // 策略 4：清理常见的 Markdown 标记后重试
-    let cleaned = text
-      .replace(/^```(?:json)?\s*/i, "")  // 去掉开头的 ```json
-      .replace(/\s*```$/, "")              // 去掉结尾的 ```
-      .replace(/^[\s\S]*?\{/, "{")         // 去掉第一个 { 之前的内容
-      .replace(/\}[\s\S]*?$/, "}");        // 去掉最后一个 } 之后的内容
-
-    try {
-      return JSON.parse(cleaned);
-    } catch {
-      // 继续
-    }
-
-    // 策略 5：尝试修复常见的 JSON 语法错误
-    try {
-      // 去掉尾随逗号
-      const fixed = cleaned
-        .replace(/,\s*([}\]])/g, "$1")
-        .replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":');
-      return JSON.parse(fixed);
-    } catch {
-      // 继续
-    }
-
-    // 所有策略都失败，打印原始输出用于调试
-    console.error("=== LLM 原始输出（前 500 字符）===");
-    console.error(text.substring(0, 500));
-    console.error("=== LLM 原始输出结束 ===");
-    throw new Error(`无法从 LLM 输出中提取 JSON。输出长度: ${text.length}，前 100 字符: ${text.substring(0, 100)}`);
+    return result.data;
   }
 
   /**
    * Step 1: 设计域划分
    */
   private async designDomains(): Promise<{ domains: DomainDef[]; visualBranches: string[] }> {
-    const systemPrompt = `你是知识图谱 Profile 设计专家。根据用户的任务描述，设计知识网络的语义域划分和视觉分支。
+    const instructions = `你是知识图谱 Profile 设计专家。根据用户的任务描述，设计知识网络的语义域划分和视觉分支。
 
 要求：
 - 语义域数量：3-8 个，每个域代表一个独立的知识领域
 - 视觉分支数量：3-5 个，用于 UI 展示的颜色/分组
 - 每个域包含：id（kebab-case）、name（中文名称）、description（一句话描述）、visualBranch（所属视觉分支）、order（排序）
 - 域划分要覆盖主题的主要方面，避免重叠
-- 参考 FMCW 雷达的域划分：physical-performance / waveform-if / nonideal-calibration / spectral-rva / detection-measurement / clustering-object / estimation / association-tracking / scene-events / system-hardware / ai-learning
+- 参考 FMCW 雷达的域划分：physical-performance / waveform-if / nonideal-calibration / spectral-rva / detection-measurement / clustering-object / estimation / association-tracking / scene-events / system-hardware / ai-learning`;
 
-输出要求（必须严格遵守）：
-1. 直接输出 JSON 对象，不要包含任何思考、解释、前缀或后缀文本
-2. 不要使用 Markdown 代码块标记（三个反引号包裹）
-3. 不要说"好的"、"以下是"等过渡语
-4. 输出的第一个字符必须是 {，最后一个字符必须是 }
-5. JSON 必须是合法的，可以直接被 JSON.parse 解析
-
-JSON 格式：
-{
-  "domains": [
-    {"id": "domain-id", "name": "域名称", "description": "描述", "visualBranch": "branch-name", "order": 1}
-  ],
-  "visualBranches": ["branch1", "branch2", "branch3"]
-}`;
-
-    const userPrompt = `主题：${this.topic}
+    const userContent = `主题：${this.topic}
 任务描述：${this.taskDescription}
 
 请设计这个知识网络的语义域划分和视觉分支。`;
 
-    // 重试机制：最多 2 次重试
-    let lastError: Error | null = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const response = await this.callLLM(systemPrompt, userPrompt);
-        const result = this.extractJSON(response);
-
-        // 调试输出：打印提取的 JSON 结构
-        console.log(`[ProfileDesigner] designDomains 尝试 ${attempt + 1}，提取的 keys:`, Object.keys(result));
-        console.log(`[ProfileDesigner] designDomains 结果:`, JSON.stringify(result).substring(0, 300));
-
-        if (result.domains && Array.isArray(result.domains) && result.visualBranches && Array.isArray(result.visualBranches)) {
-          return {
-            domains: result.domains,
-            visualBranches: result.visualBranches,
-          };
-        }
-
-        // 如果 domains 不存在，检查是否有其他字段包含域信息
-        if (!result.domains) {
-          const possibleDomainKeys = Object.keys(result).filter((k) =>
-            k.toLowerCase().includes("domain") || k.toLowerCase().includes("field") || k.toLowerCase().includes("area")
-          );
-          if (possibleDomainKeys.length > 0) {
-            console.log(`[ProfileDesigner] 找到可能的域字段:`, possibleDomainKeys);
-            const domains = result[possibleDomainKeys[0]];
-            if (Array.isArray(domains)) {
-              const branches = result.visualBranches || result.branches || ["default"];
-              return { domains, visualBranches: Array.isArray(branches) ? branches : [branches] };
-            }
-          }
-        }
-
-        lastError = new Error(`域划分设计失败：缺少 domains 数组。提取的 keys: ${Object.keys(result).join(", ")}`);
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-        console.error(`[ProfileDesigner] designDomains 尝试 ${attempt + 1} 失败:`, lastError.message);
-      }
-    }
-
-    throw lastError || new Error("域划分设计失败");
+    return this.callStructured(instructions, userContent, validateDomains);
   }
 
   /**
    * Step 2: 设计类型系统（节点类型 + 边类型）
    */
   private async designTypes(domains: DomainDef[]): Promise<{ nodeTypes: NodeTypeDef[]; edgeTypes: EdgeTypeDef[] }> {
-    const systemPrompt = `你是知识图谱 Profile 设计专家。根据主题和域划分，设计节点类型和边类型。
+    const instructions = `你是知识图谱 Profile 设计专家。根据主题和域划分，设计节点类型和边类型。
 
 基础节点类型（11种，可复用或扩展）：
 ${JSON.stringify(BASE_NODE_TYPES, null, 2)}
@@ -283,167 +203,94 @@ ${JSON.stringify(BASE_EDGE_TYPES, null, 2)}
 - 每种节点类型包含：type、singular（一个节点只放一个什么）、forbidden（禁止什么）、note（说明）、isGranularSensitive（是否受节点粒度约束）
 - 每种边类型包含：type、label、direction（symmetric/directed）、description
 - 节点类型数量：8-15 种
-- 边类型数量：8-15 种
+- 边类型数量：8-15 种`;
 
-输出 JSON 格式：
-{
-  "nodeTypes": [
-    {"type": "concept", "singular": "一个概念", "forbidden": "禁止多个并列概念", "note": "说明", "isGranularSensitive": true}
-  ],
-  "edgeTypes": [
-    {"type": "PREREQUISITE_OF", "label": "是...的前提", "direction": "directed", "description": "描述"}
-  ]
-}`;
+    const userContent = `主题：${this.topic}
+域划分：
+${domains.map((d) => `- ${d.id}: ${d.name}`).join("\n")}
 
-    const userPrompt = `主题：${this.topic}
-域划分：${domains.map((d) => `${d.name}(${d.id})`).join("、")}
+请设计节点类型和边类型。`;
 
-请设计这个知识网络的节点类型和边类型。优先复用基础类型，只有主题特定的概念才新增。`;
-
-    const response = await this.callLLM(systemPrompt, userPrompt);
-    const result = this.extractJSON(response);
-
-    if (!result.nodeTypes || !Array.isArray(result.nodeTypes)) {
-      throw new Error("类型系统设计失败：缺少 nodeTypes 数组");
-    }
-    if (!result.edgeTypes || !Array.isArray(result.edgeTypes)) {
-      throw new Error("类型系统设计失败：缺少 edgeTypes 数组");
-    }
-
-    return {
-      nodeTypes: result.nodeTypes,
-      edgeTypes: result.edgeTypes,
-    };
+    return this.callStructured(instructions, userContent, validateTypes);
   }
 
   /**
    * Step 3: 设计栏目目录
    */
   private async designCardSections(nodeTypes: NodeTypeDef[]): Promise<CardSectionDef[]> {
-    // 基础 13 个栏目，大部分主题可以直接复用
-    const baseSections: CardSectionDef[] = [
-      { type: "definition", label: "定义与边界", definition: "说明对象是什么、不是什么，以及适用范围和与近邻概念的边界。", coverage: "core", appliesTo: "all", order: 10 },
-      { type: "principle", label: "原理与推导", definition: "解释机制为何成立、关键因果链、数学依据或推导主线。", coverage: "core", appliesTo: ["problem", "concept", "method", "algorithm", "model", "component", "parameter", "metric"], order: 20 },
-      { type: "assumptions", label: "成立假设", definition: "列出结论、模型或公式成立所依赖且可被检查的前提。", coverage: "conditional", appliesTo: ["concept", "method", "algorithm", "model", "parameter", "metric"], order: 30 },
-      { type: "comparison", label: "同类方案比较", definition: "在同一问题与相同评价维度下比较可替代或相似方案。", coverage: "conditional", appliesTo: ["method", "algorithm", "model", "metric"], order: 40 },
-      { type: "inputs_outputs", label: "输入与输出", definition: "明确方法、算法、组件或数据产物所消费与产生的数据、单位、形状和语义。", coverage: "conditional", appliesTo: ["method", "algorithm", "model", "component", "artifact", "application"], order: 50 },
-      { type: "procedure", label: "实现步骤", definition: "给出可执行、可复现且有先后关系的工程或算法步骤。", coverage: "core", appliesTo: ["method", "algorithm", "component", "application"], order: 60 },
-      { type: "engineering_tradeoff", label: "工程取舍", definition: "说明资源、精度、鲁棒性、时延、复杂度之间不可同时最优的选择。", coverage: "core", appliesTo: ["method", "algorithm", "model", "component", "parameter", "application"], order: 70 },
-      { type: "failure_mode", label: "失效模式", definition: "描述何种条件下会失败、可观察症状、成因和影响。", coverage: "conditional", appliesTo: ["method", "algorithm", "model", "component", "application"], order: 80 },
-      { type: "validation", label: "验证方法", definition: "给出可判定正确性的实验、指标、基线、数据与通过标准。", coverage: "core", appliesTo: ["method", "algorithm", "model", "component", "metric", "application"], order: 90 },
-      { type: "application", label: "典型应用", definition: "说明知识在具体任务、场景或系统链路中的实际用途。", coverage: "optional", appliesTo: "all", order: 100 },
-      { type: "research_topic", label: "研究热点", definition: "记录仍在演进的开放问题、新方法方向或尚未形成工程共识的议题。", coverage: "optional", appliesTo: ["problem", "concept", "method", "algorithm", "model", "application"], order: 110 },
-      { type: "code", label: "最小实现", definition: "提供能表达核心运算的短代码、伪代码或关键 API 调用。", coverage: "optional", appliesTo: ["method", "algorithm", "model", "component", "application"], order: 120 },
-      { type: "misconception", label: "常见误区", definition: "指出常见但错误或缺少前提的说法，并给出纠正后的表述。", coverage: "optional", appliesTo: "all", order: 130 },
-    ];
+    const instructions = `你是知识图谱 Profile 设计专家。根据主题和节点类型，设计知识卡栏目目录。
 
-    // 对于大多数主题，基础栏目已经足够，不需要 LLM 重新设计
-    // 但可以让 LLM 判断是否需要新增主题特定栏目
-    const systemPrompt = `你是知识图谱 Profile 设计专家。判断当前主题是否需要在基础 13 个栏目之外新增主题特定栏目。
+基础栏目（13个，可复用或扩展）：
+- definition（定义与边界）- core
+- principle（原理与推导）- core
+- assumptions（假设与适用条件）- core
+- comparison（同类方案比较）- core
+- inputs_outputs（输入输出）- conditional
+- procedure（实现步骤）- conditional
+- engineering_tradeoff（工程取舍）- conditional
+- failure_mode（失效模式）- conditional
+- validation（验证方法）- optional
+- application（应用场景）- optional
+- research_topic（研究方向）- optional
+- code（代码实现）- optional
+- misconception（常见误区）- optional
 
-基础栏目：definition, principle, assumptions, comparison, inputs_outputs, procedure, engineering_tradeoff, failure_mode, validation, application, research_topic, code, misconception
+要求：
+- 优先复用基础栏目，只有主题特定的知识类型才新增栏目
+- 每个栏目包含：type、title、category（core/conditional/optional）、appliesTo（适用的节点类型）、description
+- 核心栏目（core）必须包含：definition、principle、assumptions、comparison
+- 栏目数量：10-15 个`;
 
-如果需要新增栏目，输出新增的栏目列表；如果不需要，输出空数组。
+    const userContent = `主题：${this.topic}
+节点类型：
+${nodeTypes.map((t) => `- ${t.type}: ${t.singular}`).join("\n")}
 
-输出 JSON 格式：
-{
-  "additionalSections": [
-    {"type": "section-id", "label": "栏目名称", "definition": "描述", "coverage": "optional", "appliesTo": "all", "order": 200}
-  ]
-}`;
+请设计知识卡栏目目录。`;
 
-    const userPrompt = `主题：${this.topic}
-节点类型：${nodeTypes.map((t) => t.type).join("、")}
-
-是否需要新增主题特定栏目？`;
-
-    try {
-      const response = await this.callLLM(systemPrompt, userPrompt);
-      const result = this.extractJSON(response);
-      if (result.additionalSections && Array.isArray(result.additionalSections)) {
-        return [...baseSections, ...result.additionalSections];
-      }
-    } catch {
-      // LLM 调用失败时使用基础栏目
-    }
-
-    return baseSections;
+    return this.callStructured(instructions, userContent, validateCardSections, 4096);
   }
 
   /**
    * Step 4: 设计提示词
    */
   private async designPrompts(domains: DomainDef[], nodeTypes: NodeTypeDef[]): Promise<PromptConfig> {
-    const systemPrompt = `你是知识图谱 Profile 设计专家。根据主题和域划分，设计 ReAct 深度检索提示词。
+    const instructions = `你是知识图谱 Profile 设计专家。根据主题和域划分，设计 ReAct 提示词和资料接入提示词。
 
 要求：
-- 提示词包含 ReAct 循环指令（Observe/Act/再观察）
-- 包含节点粒度硬约束（一个节点只放一个概念/方法/问题，禁止多个并列概念放一个节点）
-- 包含知识卡栏目填充要求
-- 包含批量合并而非逐个查重的要求
-- 提示词长度：500-1500 字
-- 主题特定的内容要替换为当前主题
+- reactPrompt：ReAct 循环的系统提示词，包含节点粒度硬约束
+- topicAppendix：主题特定的追加提示词
+- ingestPrompts：4 套资料接入提示词（conversation/summary/paper/document）
+- reviewPrompt：语义审查提示词
+- finalResponsePrompt：最终响应提示词
+- 提示词中必须包含节点粒度硬约束（一个节点只放一个概念/定义/问题/解决方案）`;
 
-输出 JSON 格式：
-{
-  "react": "ReAct 提示词文本",
-  "topicAppendix": "主题特定的追加说明"
-}`;
+    const userContent = `主题：${this.topic}
+域划分：
+${domains.map((d) => `- ${d.id}: ${d.name}`).join("\n")}
 
-    const userPrompt = `主题：${this.topic}
-域划分：${domains.map((d) => d.name).join("、")}
-节点类型：${nodeTypes.map((t) => t.type).join("、")}
+节点类型：
+${nodeTypes.map((t) => `- ${t.type}: ${t.singular}`).join("\n")}
 
-请设计这个知识网络的 ReAct 深度检索提示词。`;
+请设计提示词配置。`;
 
-    try {
-      const response = await this.callLLM(systemPrompt, userPrompt);
-      const result = this.extractJSON(response);
-
-      return {
-        react: result.react || "",
-        review: "",
-        finalResponse: "",
-        ingest: {},
-        topicAppendix: result.topicAppendix || `本知识网络聚焦 ${this.topic} 领域。`,
-      };
-    } catch {
-      // LLM 调用失败时使用基础提示词
-      return {
-        react: `你是采用 ReAct 的知识检索 Agent。Observe 当前节点及前轮发现；判断缺口；Act 深入一个尚未解决的问题，输出一批实质知识；再观察覆盖度。每批累积后统一合并，不要逐条调用图内查重工具。
-
-【节点粒度硬约束】
-1. 一个节点只放一个东西，由 nodeType 决定。
-2. 禁止把多个并列概念/方法/问题放在一个节点中。
-3. problem 类型节点只描述问题/现象本身，禁止混入解决方法。
-4. 节点名称简短具体，不超过15字。
-5. 节点摘要是一句话定义，不超过50字。`,
-        review: "",
-        finalResponse: "",
-        ingest: {},
-        topicAppendix: `本知识网络聚焦 ${this.topic} 领域。`,
-      };
-    }
+    return this.callStructured(instructions, userContent, validatePrompts, 16384);
   }
 
   /**
-   * Step 5: 设计初始化策略
+   * Step 5: 设计初始化策略（确定性，不需要 LLM）
    */
   private designInitialization(domains: DomainDef[]): TaskProfile["initialization"] {
-    const domainCount = domains.length;
-    const rootId = this.topic.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "root";
-
     return {
       rootNode: {
-        id: rootId,
+        id: this.topic.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "root",
         name: this.topic,
-        shortFact: `${this.topic}知识网络根节点`,
+        shortFact: `${this.topic}知识网络的根节点`,
       },
       mvp: {
         nodeCount: [15, 30],
         reactRounds: [2, 3],
         sectionsFilled: ["definition"],
-        domainCount: [Math.max(2, Math.floor(domainCount / 2)), domainCount],
+        domainCount: [3, Math.min(5, domains.length)],
         durationMinutes: [2, 5],
       },
       full: {
@@ -456,41 +303,35 @@ ${JSON.stringify(BASE_EDGE_TYPES, null, 2)}
   }
 
   /**
-   * 校验 Profile 是否符合契约
+   * 校验 Profile
    */
   private validateProfile(profile: TaskProfile): string[] {
     const issues: string[] = [];
 
-    // 检查必填字段
-    if (!profile.id) issues.push("缺少 id");
-    if (!profile.name) issues.push("缺少 name");
-    if (!profile.domains || profile.domains.length === 0) issues.push("缺少 domains 或为空");
-    if (!profile.visualBranches || profile.visualBranches.length === 0) issues.push("缺少 visualBranches 或为空");
-    if (!profile.nodeTypes || profile.nodeTypes.length === 0) issues.push("缺少 nodeTypes 或为空");
-    if (!profile.edgeTypes || profile.edgeTypes.length === 0) issues.push("缺少 edgeTypes 或为空");
-    if (!profile.cardSections || profile.cardSections.length === 0) issues.push("缺少 cardSections 或为空");
-    if (!profile.validation) issues.push("缺少 validation");
-    if (!profile.initialization) issues.push("缺少 initialization");
-
-    // 检查域数量与 validation 一致
-    if (profile.validation && profile.domains) {
-      if (profile.validation.domainCount !== profile.domains.length) {
-        issues.push(`validation.domainCount(${profile.validation.domainCount}) 与 domains.length(${profile.domains.length}) 不一致`);
-      }
+    if (!profile.domains || profile.domains.length < 3) {
+      issues.push(`域数量不足：${profile.domains?.length ?? 0}，至少需要 3 个`);
+    }
+    if (!profile.visualBranches || profile.visualBranches.length < 3) {
+      issues.push(`视觉分支数量不足：${profile.visualBranches?.length ?? 0}，至少需要 3 个`);
+    }
+    if (!profile.nodeTypes || profile.nodeTypes.length < 8) {
+      issues.push(`节点类型数量不足：${profile.nodeTypes?.length ?? 0}，至少需要 8 种`);
+    }
+    if (!profile.edgeTypes || profile.edgeTypes.length < 8) {
+      issues.push(`边类型数量不足：${profile.edgeTypes?.length ?? 0}，至少需要 8 种`);
+    }
+    if (!profile.cardSections || profile.cardSections.length < 10) {
+      issues.push(`栏目数量不足：${profile.cardSections?.length ?? 0}，至少需要 10 个`);
+    }
+    if (!profile.initialization?.rootNode) {
+      issues.push("缺少根节点配置");
     }
 
-    // 检查视觉分支数量与 validation 一致
-    if (profile.validation && profile.visualBranches) {
-      if (profile.validation.visualBranchCount !== profile.visualBranches.length) {
-        issues.push(`validation.visualBranchCount(${profile.validation.visualBranchCount}) 与 visualBranches.length(${profile.visualBranches.length}) 不一致`);
-      }
-    }
-
-    // 检查每个域的 visualBranch 是否在 visualBranches 中
+    // 校验域的 visualBranch 是否存在
     if (profile.domains && profile.visualBranches) {
       for (const domain of profile.domains) {
         if (!profile.visualBranches.includes(domain.visualBranch)) {
-          issues.push(`域 ${domain.id} 的 visualBranch(${domain.visualBranch}) 不在 visualBranches 列表中`);
+          issues.push(`域 ${domain.id} 的 visualBranch "${domain.visualBranch}" 不存在于视觉分支列表`);
         }
       }
     }
@@ -502,12 +343,12 @@ ${JSON.stringify(BASE_EDGE_TYPES, null, 2)}
    * 修复 Profile（让 LLM 修复校验问题）
    */
   private async fixProfile(profile: TaskProfile, issues: string[]): Promise<TaskProfile> {
-    const systemPrompt = `你是知识图谱 Profile 修复专家。根据校验问题，修复 Profile 中的错误。
+    const instructions = `你是知识图谱 Profile 修复专家。根据校验问题，修复 Profile 中的错误。
 
 只修复列出的问题，不要改变其他正确的部分。
 输出完整的修复后的 Profile JSON。`;
 
-    const userPrompt = `当前 Profile：
+    const userContent = `当前 Profile：
 ${JSON.stringify(profile, null, 2)}
 
 校验问题：
@@ -515,15 +356,14 @@ ${issues.map((issue, i) => `${i + 1}. ${issue}`).join("\n")}
 
 请修复这些问题，输出完整的修复后的 Profile JSON。`;
 
-    const response = await this.callLLM(systemPrompt, userPrompt);
-    return this.extractJSON(response);
+    return this.callStructured(instructions, userContent, (data) => data as TaskProfile, 16384);
   }
 
   /**
    * 执行完整的 Profile 设计流程
    */
   async design(): Promise<ProfileDesignResult> {
-    const warnings: string[] = [];
+    this.warnings = [];
     let iterations = 0;
 
     // Step 1: 域划分
@@ -571,25 +411,25 @@ ${issues.map((issue, i) => `${i + 1}. ${issue}`).join("\n")}
     let validationIssues = this.validateProfile(profile);
     while (validationIssues.length > 0 && iterations < this.maxIterations) {
       iterations++;
-      warnings.push(`第 ${iterations} 轮修复：${validationIssues.length} 个问题`);
+      this.warnings.push(`第 ${iterations} 轮修复：${validationIssues.length} 个问题`);
       try {
         profile = await this.fixProfile(profile, validationIssues);
         validationIssues = this.validateProfile(profile);
       } catch (error) {
-        warnings.push(`修复失败：${error instanceof Error ? error.message : String(error)}`);
+        this.warnings.push(`修复失败：${error instanceof Error ? error.message : String(error)}`);
         break;
       }
     }
 
     if (validationIssues.length > 0) {
-      warnings.push(`经过 ${iterations} 轮修复后仍有 ${validationIssues.length} 个问题未解决`);
+      this.warnings.push(`经过 ${iterations} 轮修复后仍有 ${validationIssues.length} 个问题未解决`);
     }
 
     return {
       profile,
       iterations,
       validationIssues,
-      warnings,
+      warnings: this.warnings,
     };
   }
 
@@ -598,21 +438,18 @@ ${issues.map((issue, i) => `${i + 1}. ${issue}`).join("\n")}
    */
   writeProfileToFile(profile: TaskProfile, outputPath?: string): string {
     const profileId = profile.id;
-    const filePath = outputPath || join(process.cwd(), "profiles", `${profileId}.ts`);
+    const defaultPath = join(process.cwd(), "profiles", `${profileId}.ts`);
+    const filePath = outputPath || defaultPath;
 
-    const content = `/**
- * ${profile.name} Profile
- *
- * 由 Profile 设计器自动生成
- * 版本：${profile.version}
- * 描述：${profile.description}
- */
+    const content = `// Auto-generated by ProfileDesigner
+// Topic: ${profile.name}
+// Created: ${profile.createdAt}
 
 import type { TaskProfile } from "../plugin/contracts/task-profile";
 
-export const ${profileId.toUpperCase().replace(/-/g, "_")}_PROFILE: TaskProfile = ${JSON.stringify(profile, null, 2)};
+export const ${profileId.replace(/-/g, "_")}_profile: TaskProfile = ${JSON.stringify(profile, null, 2)};
 
-export default ${profileId.toUpperCase().replace(/-/g, "_")}_PROFILE;
+export default ${profileId.replace(/-/g, "_")}_profile;
 `;
 
     writeFileSync(filePath, content, "utf8");
@@ -620,4 +457,23 @@ export default ${profileId.toUpperCase().replace(/-/g, "_")}_PROFILE;
   }
 }
 
-export default ProfileDesigner;
+/**
+ * 从配置文件加载 LLM 配置（兼容旧接口）
+ */
+export function loadLLMConfigFromFile(): { apiKey: string; baseUrl: string; model: string } {
+  try {
+    const configPath = join(process.cwd(), "data", "runtime", "llm-config.json");
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    return {
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
+      model: config.model,
+    };
+  } catch {
+    return {
+      apiKey: process.env.LLM_API_KEY || "",
+      baseUrl: process.env.LLM_BASE_URL || "https://api.deepseek.com",
+      model: process.env.LLM_MODEL || "deepseek-chat",
+    };
+  }
+}
