@@ -88,6 +88,49 @@ export class ProfileLoader {
   }
 
   /**
+   * 获取节点类型定义
+   */
+  getNodeTypes(): TaskProfile["nodeTypes"] {
+    return this.getCurrent().nodeTypes;
+  }
+
+  /**
+   * 获取边类型定义
+   */
+  getEdgeTypes(): TaskProfile["edgeTypes"] {
+    return this.getCurrent().edgeTypes;
+  }
+
+  /**
+   * 获取知识卡栏目定义
+   */
+  getCardSections(): TaskProfile["cardSections"] {
+    return this.getCurrent().cardSections;
+  }
+
+  /**
+   * 获取提示词配置
+   */
+  getPrompts(): TaskProfile["prompts"] {
+    return this.getCurrent().prompts;
+  }
+
+  /**
+   * 获取初始化策略（MVP vs 完整开发参数）
+   */
+  getInitialization(): TaskProfile["initialization"] {
+    return this.getCurrent().initialization;
+  }
+
+  /**
+   * 获取 Profile 元数据
+   */
+  getMetadata(): { id: string; name: string; version: string; description: string } {
+    const p = this.getCurrent();
+    return { id: p.id, name: p.name, version: p.version, description: p.description };
+  }
+
+  /**
    * 注册自定义 Profile（P3-3 后用于 LLM 设计的动态 Profile）
    */
   register(profile: TaskProfile): void {
