@@ -148,9 +148,24 @@ export const FMCW_PROFILE: TaskProfile = {
   ],
 
   // ============================================================
-  // Step 3：栏目目录（待抽取，当前使用 CARD_SECTION_CATALOG）
+  // Step 3：栏目目录（已完成抽取）
   // ============================================================
-  cardSections: [],  // Step 3 填充
+  // 13 个知识卡栏目，含 coverage（core/conditional/optional）和 appliesTo
+  cardSections: [
+    { type: "definition", label: "定义与边界", definition: "说明对象是什么、不是什么，以及适用范围和与近邻概念的边界。", coverage: "core", appliesTo: "all", order: 10 },
+    { type: "principle", label: "原理与推导", definition: "解释机制为何成立、关键因果链、数学依据或推导主线。", coverage: "core", appliesTo: ["problem", "concept", "method", "algorithm", "model", "component", "parameter", "metric"], order: 20 },
+    { type: "assumptions", label: "成立假设", definition: "列出结论、模型或公式成立所依赖且可被检查的前提。", coverage: "conditional", appliesTo: ["concept", "method", "algorithm", "model", "parameter", "metric"], order: 30 },
+    { type: "comparison", label: "同类方案比较", definition: "在同一问题与相同评价维度下比较可替代或相似方案。", coverage: "conditional", appliesTo: ["method", "algorithm", "model", "metric"], order: 40 },
+    { type: "inputs_outputs", label: "输入与输出", definition: "明确方法、算法、组件或数据产物所消费与产生的数据、单位、形状和语义。", coverage: "conditional", appliesTo: ["method", "algorithm", "model", "component", "artifact", "application"], order: 50 },
+    { type: "procedure", label: "实现步骤", definition: "给出可执行、可复现且有先后关系的工程或算法步骤。", coverage: "core", appliesTo: ["method", "algorithm", "component", "application"], order: 60 },
+    { type: "engineering_tradeoff", label: "工程取舍", definition: "说明资源、精度、鲁棒性、时延、复杂度之间不可同时最优的选择。", coverage: "core", appliesTo: ["method", "algorithm", "model", "component", "parameter", "application"], order: 70 },
+    { type: "failure_mode", label: "失效模式", definition: "描述何种条件下会失败、可观察症状、成因和影响。", coverage: "conditional", appliesTo: ["method", "algorithm", "model", "component", "application"], order: 80 },
+    { type: "validation", label: "验证方法", definition: "给出可判定正确性的实验、指标、基线、数据与通过标准。", coverage: "core", appliesTo: ["method", "algorithm", "model", "component", "metric", "application"], order: 90 },
+    { type: "application", label: "典型应用", definition: "说明知识在具体任务、场景或系统链路中的实际用途。", coverage: "optional", appliesTo: "all", order: 100 },
+    { type: "research_topic", label: "研究热点", definition: "记录仍在演进的开放问题、新方法方向或尚未形成工程共识的议题。", coverage: "optional", appliesTo: ["problem", "concept", "method", "algorithm", "model", "application"], order: 110 },
+    { type: "code", label: "最小实现", definition: "提供能表达核心运算的短代码、伪代码或关键 API 调用。", coverage: "optional", appliesTo: ["method", "algorithm", "model", "component", "application"], order: 120 },
+    { type: "misconception", label: "常见误区", definition: "指出常见但错误或缺少前提的说法，并给出纠正后的表述。", coverage: "optional", appliesTo: "all", order: 130 },
+  ],
 
   // ============================================================
   // Step 4：审查规则配置化（待抽取）
