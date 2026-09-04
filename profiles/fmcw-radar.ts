@@ -14,6 +14,7 @@
  */
 
 import type { TaskProfile } from "../plugin/contracts/task-profile";
+import { FMCW_PROMPTS } from "./prompts/fmcw-prompts";
 
 /**
  * FMCW 毫米波雷达知识网络 Profile
@@ -177,14 +178,11 @@ export const FMCW_PROFILE: TaskProfile = {
   },
 
   // ============================================================
-  // Step 5：提示词抽取（待抽取）
+  // Step 5：提示词抽取（已完成）
   // ============================================================
-  prompts: {
-    react: "",        // Step 5 填充：从 adaptive-research.ts 抽取
-    review: "",       // Step 5 填充
-    finalResponse: "", // Step 5 填充
-    ingest: {},       // Step 5 填充：从 ingest/route.ts 抽取
-  },
+  // 从 adaptive-research.ts / online-agent-service.ts / ingest/route.ts 抽取
+  // 存储在 profiles/prompts/fmcw-prompts.ts，包含 react/review/finalResponse/ingest/topicAppendix
+  prompts: FMCW_PROMPTS,
 
   // ============================================================
   // Step 6：根节点与初始数据策略（待抽取）
