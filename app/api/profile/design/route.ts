@@ -1,0 +1,55 @@
+/**
+ * Profile 设计 API
+ *
+ * P3-3：通用 LLM 根据用户的任务描述，自动设计一个完整的 TaskProfile。
+ *
+ * POST /api/profile/design
+ * Body: { topic: string, taskDescription: string, writeToFile?: boolean }
+ * Response: { profile: TaskProfile, iterations: number, validationIssues: string[], warnings: string[], filePath?: string }
+ */
+
+import { NextRequest, NextResponse } from "next/server";
+import { ProfileDesigner } from "../../../../server/profile/profile-designer";
+
+export const runtime = "nodejs";
+export const maxDuration = 300; // 5 分钟超时
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { topic, taskDescription, writeToFile = false } = body;
+
+    if (!topic || !taskDescription) {
+      return NextResponse.json(
+        { error: "缺少 topic 或 taskDescription 参数" },
+        { status: 400 }
+      );
+    }
+
+    const designer = new ProfileDesigner(topic, taskDescription);
+    const result = await designer.design();
+
+    let filePath: string | undefined;
+    if (writeToFile) {
+      try {
+        filePath = designer.writeProfileToFile(result.profile);
+      } catch (error) {
+        result.warnings.push(`写入文件失败：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    return NextResponse.json({
+      ...result,
+      filePath,
+    });
+  } catch (error) {
+    console.error("Profile 设计失败:", error);
+    return NextResponse.json(
+      {
+        error: "Profile 设计失败",
+        details: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 }
+    );
+  }
+}
