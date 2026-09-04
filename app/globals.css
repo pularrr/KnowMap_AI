@@ -262,7 +262,7 @@ button:focus-visible, [role="button"]:focus-visible { outline: 2px solid var(--a
   .savepoint-button { display: none; }
   .ai-config-button { max-width: 116px; }
 }
-:root { --font-xs1:12px; --font-xs2:13px; --font-sm1:14px; --font-sm2:15px; --font-md1:16px; --font-md2:17px; --font-lg1:18px; --font-lg2:20px; --font-xl1:24px; --font-xl2:28px; }
+:root { --font-xs1:10px; --font-xs2:13px; --font-sm1:10px; --font-sm2:13px; --font-md1:13px; --font-md2:15px; --font-lg1:16px; --font-lg2:18px; --font-xl1:22px; --font-xl2:28px; }
 .llm-dialog { max-height: calc(100dvh - 40px); overflow-y:auto; }
 .typography-settings { padding:16px 0 0; margin-top:16px; border-top:1px solid var(--line); }
 .font-settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px; }

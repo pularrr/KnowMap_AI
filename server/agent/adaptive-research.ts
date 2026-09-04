@@ -6,6 +6,12 @@ import { CARD_SECTION_CATALOG } from "../../core/knowledge/card-section-catalog"
 import { executeKnowledgeTool, type KnowledgeToolObservation } from "./knowledge-tools";
 import { requestResearch, type ResearchDocument } from "./research-output";
 
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
 export function researchBudget(nodeCount: number, root: boolean) {
   const sparse = nodeCount < 20;
   return { minRounds: sparse ? 6 : 4, initialRounds: sparse ? 10 : 6, maxNodeRounds: sparse ? 24 : 18,
@@ -97,7 +103,39 @@ export async function collectAdaptiveResearch(input: {
             checkpoint.calls++;
           } });
         localBatches.push(document); checkpoint.batches.push(document); modelFailures = 0;
-        const discoveries = document.proposal.newNodes.length + document.proposal.cardBlocks.length;
+        let discoveries = document.proposal.newNodes.length + document.proposal.cardBlocks.length;
+        // Distributed sub-calls: when gaps or new nodes exceed threshold, split into
+        // multiple lightweight calls each focusing on a subset of gaps, reducing per-call load.
+        const needDistribute = (document.gaps.length > 3 || document.proposal.newNodes.length > 8) && !outOfBudget();
+        if (needDistribute) {
+          report("检测到较多未解决缺口，拆分为分布式子调用降低单次负荷…");
+          const gapGroups = chunkArray(document.gaps, 2).slice(0, 2);
+          for (const group of gapGroups) {
+            if (outOfBudget()) break;
+            const subMessages: LlmMessage[] = [{ role: "user", content: JSON.stringify({
+              task: input.query.slice(0, 24000), topic, round: round + 1,
+              context: context.slice(0, 2),
+              graphIndex: dataset.nodes.map((n) => ({ id: n.id, name: n.canonicalName, parentId: n.primaryParentId })).slice(0, 200),
+              pendingNodeIndex: checkpoint.batches.flatMap((b) => b.proposal.newNodes.map((n) => ({ id:n.id || n.canonicalName, name:n.canonicalName, parentId:n.parentId }))).slice(-200),
+              previousFindings: [{ assessment: document.coverageAssessment, gaps: group, names: document.proposal.newNodes.map((n) => n.canonicalName), blocks: document.proposal.cardBlocks.map((c) => c.title) }],
+              sources: external, focusGaps: group, sectionMetadata: CARD_SECTION_CATALOG,
+            }).slice(0, 60000) }];
+            try {
+              const { document: subDoc } = await requestResearch(provider,
+                "你是采用 ReAct 的知识检索 Agent。本轮为分布式子调用，仅聚焦 focusGaps 中列出的未解决问题。Observe 当前节点及前轮发现；针对指定缺口深入研究；输出一批实质知识。不要重复已有节点和卡片。新增节点可引用本批或此前批次新节点ID作为父级。只有指定缺口全部解决时才标记收敛。", subMessages,
+                { onDiagnostic: report, signal: deadline, onCall: () => {
+                  if (outOfBudget()) throw new Error("已达到研究预算");
+                  checkpoint.calls++;
+                } });
+              localBatches.push(subDoc); checkpoint.batches.push(subDoc);
+              discoveries += subDoc.proposal.newNodes.length + subDoc.proposal.cardBlocks.length;
+              report("分布式子调用完成，新增 " + subDoc.proposal.newNodes.length + " 节点 / " + subDoc.proposal.cardBlocks.length + " 卡片");
+            } catch (error) {
+              report(error instanceof Error ? error.message : "分布式子调用未完成");
+            }
+          }
+          save();
+        }
         quietRounds = document.converged && discoveries <= 1 ? quietRounds + 1 : 0;
         if (discoveries >= 5) limit = Math.min(budget.maxNodeRounds, limit + 2);
         save();

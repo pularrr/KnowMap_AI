@@ -2,11 +2,11 @@
 import { useState } from "react";
 
 export const FONT_SLOTS = [
-  ["xs1", "超小 · 辅助", 12], ["xs2", "超小 · 标注", 13],
-  ["sm1", "小 · 次正文", 14], ["sm2", "小 · 控件", 15],
-  ["md1", "中 · 正文", 16], ["md2", "中 · 强调", 17],
-  ["lg1", "大 · 小标题", 18], ["lg2", "大 · 标题", 20],
-  ["xl1", "超大 · 页面标题", 24], ["xl2", "超大 · 公式", 28],
+  ["xs1", "超小 · 辅助", 10], ["xs2", "超小 · 标注", 13],
+  ["sm1", "小 · 次正文", 10], ["sm2", "小 · 控件", 13],
+  ["md1", "中 · 正文", 13], ["md2", "中 · 强调", 15],
+  ["lg1", "大 · 小标题", 16], ["lg2", "大 · 标题", 18],
+  ["xl1", "超大 · 页面标题", 22], ["xl2", "超大 · 公式", 28],
 ] as const;
 type Sizes = Record<string, number>;
 const defaults = (): Sizes => Object.fromEntries(FONT_SLOTS.map(([key, , size]) => [key, size]));
