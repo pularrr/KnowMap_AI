@@ -40,7 +40,6 @@
     "vite.config.ts",
     "drizzle.config.ts",
     ".sites-runtime",
-    "dist",
-    "templates"
+    "dist"
   ]
 }

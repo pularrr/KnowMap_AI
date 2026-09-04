@@ -1,34 +1,30 @@
 #!/usr/bin/env node
 /**
- * KnowMap 应用脚手架脚本
+ * KnowMap 应用脚手架脚本（完整版）
  *
- * P3-2 Step7：Profile 加载机制与脚手架
+ * P3 插件化：复制完整应用模板 + 注入 Profile + 自动替换配置
  *
  * 用法：
  *   node scripts/create-app.mjs --profile fmcw-radar --name my-app
  *   node scripts/create-app.mjs --list-profiles
  *
- * 当前版本（基础版）：
- * - 列出可用 Profile
- * - 生成应用目录结构
- * - 复制 Profile 配置
- * - 输出后续步骤说明
- *
- * 完整版本（P3-5/P3-6 完善）：
- * - 复制完整应用模板
- * - 自动安装依赖
- * - 自动配置 LLM
- * - 自动启动开发服务器
+ * 功能：
+ * - 复制 templates/app/ 完整应用模板（~210个文件，包含通用核心引擎）
+ * - 注入选择的 Profile（复制到 profiles/）
+ * - 自动替换 app/config.ts 中的占位符（应用名称、根节点ID等）
+ * - 自动替换 package.json 中的 name
+ * - 创建空的 data/runtime/ 目录（用户自己配置 LLM 和生成知识数据）
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, readdirSync } from "fs";
-import { join, resolve } from "path";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, readdirSync, rmSync } from "fs";
+import { join, resolve, basename } from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROJECT_ROOT = resolve(__dirname, "..");
+const TEMPLATE_DIR = join(PROJECT_ROOT, "templates", "app");
 
 // 解析命令行参数
 function parseArgs() {
@@ -72,7 +68,7 @@ function parseArgs() {
 // 打印帮助信息
 function printHelp() {
   console.log(`
-KnowMap 应用脚手架
+KnowMap 应用脚手架（完整版）
 
 用法：
   node scripts/create-app.mjs --profile <profile-id> --name <app-name>
@@ -80,42 +76,82 @@ KnowMap 应用脚手架
 
 选项：
   -p, --profile <id>     Profile ID（如 fmcw-radar）
-  -n, --name <name>      应用名称
+  -n, --name <name>      应用名称（如 my-radar-app）
   -o, --output <path>    输出目录（默认：./<app-name>）
   -l, --list-profiles    列出所有可用 Profile
   -h, --help             显示帮助信息
 
 示例：
   node scripts/create-app.mjs --profile fmcw-radar --name my-radar-app
-  node scripts/create-app.mjs --list-profiles
+  node scripts/create-app.mjs --profile lidar --name lidar-knowledge-graph
+
+功能：
+  - 复制 templates/app/ 完整应用模板（~210个文件）
+  - 包含通用核心引擎：自适应 ReAct、上下文管理、分布式子调用、节点粒度审查、LlmProvider、知识图谱 UI
+  - 注入选择的 Profile 配置
+  - 自动替换应用名称、根节点 ID 等配置
 `);
 }
 
 // 列出可用 Profile
 function listProfiles() {
   const profilesDir = join(PROJECT_ROOT, "profiles");
-  if (!existsSync(profilesDir)) {
-    console.log("未找到 profiles 目录");
-    return;
-  }
-
   console.log("\n可用 Profile：\n");
-  console.log("  ID              名称                              版本");
-  console.log("  " + "-".repeat(70));
+  console.log("  ID".padEnd(20) + "名称".padEnd(30) + "说明");
+  console.log("  " + "-".repeat(80));
 
-  // FMCW Profile（已知）
-  console.log("  fmcw-radar      FMCW 毫米波雷达知识网络           0.1.0");
-
-  // 扫描 profiles 目录中的其他 Profile
   if (existsSync(profilesDir)) {
-    const files = readdirSync(profilesDir).filter((f) => f.endsWith(".ts") && f !== "fmcw-radar.ts");
+    const files = readdirSync(profilesDir).filter((f) => f.endsWith(".ts"));
     for (const file of files) {
       const id = file.replace(".ts", "");
-      console.log(`  ${id.padEnd(16)}（待加载）`.padEnd(50) + "  -");
+      // 尝试读取 Profile 名称
+      let name = "";
+      let description = "";
+      try {
+        const content = readFileSync(join(profilesDir, file), "utf8");
+        const nameMatch = content.match(/name:\s*["']([^"']+)["']/);
+        if (nameMatch) name = nameMatch[1];
+        const descMatch = content.match(/description:\s*["']([^"']+)["']/);
+        if (descMatch) description = descMatch[1];
+      } catch (e) {
+        // 忽略解析错误
+      }
+      console.log("  " + id.padEnd(20) + (name || "(待加载)").padEnd(30) + (description || ""));
     }
+  } else {
+    console.log("  （未找到 profiles 目录）");
   }
 
   console.log("\n提示：使用 --profile <id> --name <app-name> 创建应用\n");
+}
+
+// 递归复制目录
+function copyDir(src, dest) {
+  if (!existsSync(dest)) {
+    mkdirSync(dest, { recursive: true });
+  }
+
+  const entries = readdirSync(src, { withFileTypes: true });
+  for (const entry of entries) {
+    const srcPath = join(src, entry.name);
+    const destPath = join(dest, entry.name);
+
+    if (entry.isDirectory()) {
+      copyDir(srcPath, destPath);
+    } else if (entry.isFile()) {
+      copyFileSync(srcPath, destPath);
+    }
+  }
+}
+
+// 替换文件中的占位符
+function replacePlaceholders(filePath, replacements) {
+  if (!existsSync(filePath)) return;
+  let content = readFileSync(filePath, "utf8");
+  for (const [placeholder, value] of Object.entries(replacements)) {
+    content = content.split(placeholder).join(value);
+  }
+  writeFileSync(filePath, content, "utf8");
 }
 
 // 创建应用
@@ -137,168 +173,125 @@ function createApp(profileId, appName, outputPath) {
   console.log(`  输出目录: ${targetDir}`);
   console.log();
 
+  // 检查模板目录
+  if (!existsSync(TEMPLATE_DIR)) {
+    console.error(`错误：模板目录不存在: ${TEMPLATE_DIR}`);
+    console.error(`请先运行 P3 插件化开发，创建 templates/app/ 目录`);
+    process.exit(1);
+  }
+
   // 检查目标目录
   if (existsSync(targetDir)) {
     console.error(`错误：目录 ${targetDir} 已存在`);
     process.exit(1);
   }
 
-  // 创建目录结构
-  const dirs = [
-    "",
-    "app",
-    "app/api",
-    "components",
-    "core",
-    "core/knowledge",
-    "data",
-    "data/runtime",
-    "profiles",
-    "server",
-    "server/agent",
-    "server/profile",
-    "public",
-    "scripts",
-    "docs",
-  ];
+  // Step 1: 复制完整应用模板
+  console.log("Step 1/5: 复制完整应用模板...");
+  copyDir(TEMPLATE_DIR, targetDir);
+  console.log("  ✓ 已复制 templates/app/ 完整模板");
 
-  for (const dir of dirs) {
-    mkdirSync(join(targetDir, dir), { recursive: true });
-  }
-  console.log("✓ 创建目录结构");
-
-  // 复制 Profile
+  // Step 2: 注入 Profile
+  console.log("Step 2/5: 注入 Profile 配置...");
   const profileSource = join(PROJECT_ROOT, "profiles", `${profileId}.ts`);
   const profileTarget = join(targetDir, "profiles", `${profileId}.ts`);
   if (existsSync(profileSource)) {
+    // 确保 profiles 目录存在
+    if (!existsSync(join(targetDir, "profiles"))) {
+      mkdirSync(join(targetDir, "profiles"), { recursive: true });
+    }
     copyFileSync(profileSource, profileTarget);
-    console.log(`✓ 复制 Profile: ${profileId}`);
+    console.log(`  ✓ 已复制 Profile: ${profileId}`);
   } else {
-    console.log(`⚠ Profile 文件未找到: ${profileSource}`);
-    console.log(`  将创建基础 Profile 模板`);
-    writeFileSync(
-      profileTarget,
-      `// ${appName} Profile\n// 基于 ${profileId} 模板\n\nexport const profile = {\n  id: "${profileId}",\n  name: "${appName}",\n  version: "0.1.0",\n  domains: [],\n  nodeTypes: [],\n  edgeTypes: [],\n  cardSections: [],\n  validation: { domainCount: 0, visualBranchCount: 0, rootNodeRequired: true },\n  prompts: { react: "", review: "", finalResponse: "", ingest: {} },\n  initialization: { rootNode: { id: "root", name: "${appName}", shortFact: "" }, mvp: { nodeCount: [15, 30], reactRounds: [2, 3], sectionsFilled: ["definition"], domainCount: [3, 5], durationMinutes: [2, 5] }, full: { nodeCount: [80, 150], reactRounds: [6, 24], rootBudgetMinutes: [25, 35], durationMinutes: [25, 40] } },\n};\n`,
-      "utf8"
-    );
+    console.log(`  ⚠ Profile 文件未找到: ${profileSource}`);
+    console.log(`    将创建基础 Profile 模板`);
+    // 创建基础 Profile
+    const baseProfile = `// ${appName} Profile
+// 基于 ${profileId} 模板
+
+export const profile = {
+  id: "${profileId}",
+  name: "${appName}",
+  version: "0.1.0",
+  domains: [],
+  nodeTypes: [],
+  edgeTypes: [],
+  cardSections: [],
+  validation: { domainCount: 0, visualBranchCount: 0, rootNodeRequired: true },
+  prompts: { react: "", review: "", finalResponse: "", ingest: {} },
+  initialization: {
+    rootNode: { id: "root", name: "${appName}", shortFact: "" },
+    mvp: { nodeCount: [15, 30], reactRounds: [2, 3], sectionsFilled: ["definition"], domainCount: [3, 5], durationMinutes: [2, 5] },
+    full: { nodeCount: [80, 150], reactRounds: [6, 24], rootBudgetMinutes: [25, 35], durationMinutes: [25, 40] }
+  },
+};
+`;
+    writeFileSync(profileTarget, baseProfile, "utf8");
+    console.log(`  ✓ 已创建基础 Profile 模板`);
   }
 
-  // 创建 package.json
-  const packageJson = {
-    name: appName,
-    version: "0.1.0",
-    private: true,
-    scripts: {
-      dev: "next dev",
-      build: "next build",
-      start: "next start",
-      lint: "next lint",
-      "type-check": "tsc --noEmit",
-    },
-    dependencies: {
-      next: "^16.2.6",
-      react: "^19.2.6",
-      "react-dom": "^19.2.6",
-    },
-    devDependencies: {
-      typescript: "^5.9.3",
-      "@types/node": "^22.13.0",
-      "@types/react": "^19.0.0",
-      "@types/react-dom": "^19.0.0",
-    },
-  };
-  writeFileSync(join(targetDir, "package.json"), JSON.stringify(packageJson, null, 2), "utf8");
-  console.log("✓ 创建 package.json");
+  // Step 3: 替换 app/config.ts 占位符
+  console.log("Step 3/5: 替换应用配置占位符...");
+  const configPath = join(targetDir, "app", "config.ts");
+  const storagePrefix = appName.toLowerCase().replace(/[^a-z0-9]/g, "-");
+  const rootNodeId = profileId.toLowerCase().replace(/[^a-z0-9]/g, "-");
+  replacePlaceholders(configPath, {
+    "{{APP_NAME}}": appName,
+    "{{APP_SUBTITLE}}": `${appName}知识网络`,
+    "{{ROOT_NODE_ID}}": rootNodeId,
+    "{{STORAGE_PREFIX}}": storagePrefix,
+    "{{EYEBROW}}": "KNOWLEDGE GRAPH · AI ASSISTANT",
+  });
+  console.log(`  ✓ 已替换 app/config.ts 占位符`);
+  console.log(`    - APP_NAME: ${appName}`);
+  console.log(`    - ROOT_NODE_ID: ${rootNodeId}`);
+  console.log(`    - STORAGE_PREFIX: ${storagePrefix}`);
 
-  // 创建 tsconfig.json
-  const tsconfig = {
-    compilerOptions: {
-      target: "ES2022",
-      lib: ["dom", "dom.iterable", "esnext"],
-      allowJs: true,
-      skipLibCheck: true,
-      strict: true,
-      noEmit: true,
-      esModuleInterop: true,
-      module: "esnext",
-      moduleResolution: "bundler",
-      resolveJsonModule: true,
-      isolatedModules: true,
-      jsx: "preserve",
-      incremental: true,
-      plugins: [{ name: "next" }],
-    },
-    include: ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-    exclude: ["node_modules"],
-  };
-  writeFileSync(join(targetDir, "tsconfig.json"), JSON.stringify(tsconfig, null, 2), "utf8");
-  console.log("✓ 创建 tsconfig.json");
+  // Step 4: 替换 package.json 中的 name
+  console.log("Step 4/5: 替换 package.json 配置...");
+  const packageJsonPath = join(targetDir, "package.json");
+  if (existsSync(packageJsonPath)) {
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+    packageJson.name = appName;
+    writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2), "utf8");
+    console.log(`  ✓ 已替换 package.json name: ${appName}`);
+  }
 
-  // 创建 README
-  const readme = `# ${appName}
-
-基于 KnowMap 插件生成的知识图谱应用。
-
-## Profile
-
-- ID: ${profileId}
-- 配置文件: profiles/${profileId}.ts
-
-## 快速开始
-
-\`\`\`bash
-# 安装依赖
-npm install
-
-# 启动开发服务器
-npm run dev
-
-# 类型检查
-npm run type-check
-\`\`\`
-
-## 项目结构
-
-\`\`\`
-${appName}/
-├── app/                    # Next.js App Router
-├── components/             # React 组件
-├── core/                   # 核心逻辑（知识图谱 schema、验证、栏目）
-├── data/                   # 运行时数据
-├── profiles/               # Profile 配置
-├── server/                 # 服务端逻辑（Agent、Profile 加载）
-├── scripts/                # 脚本
-└── docs/                   # 文档
-\`\`\`
-
-## 下一步
-
-1. 完善 Profile 配置（profiles/${profileId}.ts）
-2. 实现知识图谱 UI 组件
-3. 实现 Agent Loop（ReAct 深度检索）
-4. 配置 LLM API
-5. 运行 \`npm run dev\` 启动应用
-
-## 参考
-
-- KnowMap 插件文档: plugin/SKILL.md
-- FMCW 基准应用: ../../fmcw-radar-knowledge-graph
-`;
-  writeFileSync(join(targetDir, "README.md"), readme, "utf8");
-  console.log("✓ 创建 README.md");
+  // Step 5: 创建空的 data/runtime/ 目录
+  console.log("Step 5/5: 创建运行时数据目录...");
+  const runtimeDir = join(targetDir, "data", "runtime");
+  if (!existsSync(runtimeDir)) {
+    mkdirSync(runtimeDir, { recursive: true });
+  }
+  // 创建 .gitkeep 文件
+  writeFileSync(join(runtimeDir, ".gitkeep"), "", "utf8");
+  console.log("  ✓ 已创建 data/runtime/ 目录（用户自己配置 LLM 和生成知识数据）");
 
   // 完成
   console.log(`\n✓ 应用创建成功！\n`);
   console.log(`  目录: ${targetDir}`);
   console.log();
+  console.log(`  包含功能：`);
+  console.log(`    ✓ 自适应 ReAct（逐节点重置、自适应预算）`);
+  console.log(`    ✓ 上下文管理（compactObservation + rollingContext）`);
+  console.log(`    ✓ 分布式子调用（gaps>3 或 newNodes>8 时触发）`);
+  console.log(`    ✓ 节点粒度审查（4条规则：多概念节点、名称过长、摘要过长、problem混入解决方法）`);
+  console.log(`    ✓ LlmProvider（推理模型兼容、重试、repair）`);
+  console.log(`    ✓ 知识图谱 UI（图谱渲染、知识树、卡片面板、聊天界面、字号设置）`);
+  console.log(`    ✓ API 路由（/api/agent/generate、/api/chat、/api/knowledge 等）`);
+  console.log();
   console.log(`  下一步：`);
   console.log(`    1. cd ${appName}`);
   console.log(`    2. npm install`);
-  console.log(`    3. 完善 profiles/${profileId}.ts`);
-  console.log(`    4. npm run dev`);
+  console.log(`    3. 配置 LLM API（在应用右上角点击"配置 LLM"）`);
+  console.log(`    4. 点击"生成知识网络"按钮，生成初始知识图谱`);
+  console.log(`    5. npm run dev 启动开发服务器`);
   console.log();
-  console.log(`  注意：当前为基础脚手架，完整应用模板将在 P3-5/P3-6 完善。`);
-  console.log(`  可参考 FMCW 基准应用（${PROJECT_ROOT}）的完整实现。\n`);
+  console.log(`  注意：`);
+  console.log(`    - 知识数据存储在 data/runtime/knowledge-state.json`);
+  console.log(`    - LLM 配置存储在 data/runtime/llm-config.json`);
+  console.log(`    - Profile 配置在 profiles/${profileId}.ts，可根据需要修改`);
+  console.log();
 }
 
 // 主函数
