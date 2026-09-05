@@ -1,21 +1,25 @@
 {
   "name": "knowmap-plugin",
-  "version": "0.1.0",
-  "description": "从自然语言主题设计 Profile、生成并确认 MVP、构建和校验知识网络应用。",
+  "version": "0.1.0+codex.20260905124522",
+  "description": "\u4ece\u81ea\u7136\u8bed\u8a00\u4e3b\u9898\u8bbe\u8ba1 Profile\u3001\u751f\u6210\u5e76\u786e\u8ba4 MVP\u3001\u6784\u5efa\u548c\u6821\u9a8c\u77e5\u8bc6\u7f51\u7edc\u5e94\u7528\u3002",
   "author": {
     "name": "knowmap-agent"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "KnowMap",
-    "shortDescription": "从主题生成可运行的 AI 知识网络应用。",
-    "longDescription": "让 Codex 根据自然语言任务调用仓库中的 KnowMap 构建流程，完成 Profile、MVP、完整研究、校验和应用注入。",
+    "shortDescription": "\u4ece\u4e3b\u9898\u751f\u6210\u53ef\u8fd0\u884c\u7684 AI \u77e5\u8bc6\u7f51\u7edc\u5e94\u7528\u3002",
+    "longDescription": "\u8ba9 Codex \u6839\u636e\u81ea\u7136\u8bed\u8a00\u4efb\u52a1\u8c03\u7528\u4ed3\u5e93\u4e2d\u7684 KnowMap \u6784\u5efa\u6d41\u7a0b\uff0c\u5b8c\u6210 Profile\u3001MVP\u3001\u5b8c\u6574\u7814\u7a76\u3001\u6821\u9a8c\u548c\u5e94\u7528\u6ce8\u5165\u3002",
     "developerName": "knowmap-agent",
     "category": "Productivity",
-    "capabilities": ["Profile design", "Knowledge network generation", "Application scaffolding"],
+    "capabilities": [
+      "Profile design",
+      "Knowledge network generation",
+      "Application scaffolding"
+    ],
     "defaultPrompt": [
-      "根据我给出的主题设计知识网络 Profile，并生成 MVP。",
-      "继续开发我已确认的 MVP，生成完整知识网络应用。"
+      "\u6839\u636e\u6211\u7ed9\u51fa\u7684\u4e3b\u9898\u8bbe\u8ba1\u77e5\u8bc6\u7f51\u7edc Profile\uff0c\u5e76\u751f\u6210 MVP\u3002",
+      "\u7ee7\u7eed\u5f00\u53d1\u6211\u5df2\u786e\u8ba4\u7684 MVP\uff0c\u751f\u6210\u5b8c\u6574\u77e5\u8bc6\u7f51\u7edc\u5e94\u7528\u3002"
     ]
   }
 }
