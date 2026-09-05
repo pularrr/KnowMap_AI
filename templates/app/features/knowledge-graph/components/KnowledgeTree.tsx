@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { ACTIVE_PROFILE } from "../../../profiles/active";
 import {
   branchMeta,
   knowledgeNodes,
@@ -19,7 +20,7 @@ type KnowledgeTreeProps = {
 
 export function KnowledgeTree({ focusId, selectedId, onReveal, nodes = knowledgeNodes, layoutIndex }: KnowledgeTreeProps) {
   const [treeQuery, setTreeQuery] = useState("");
-  const [expandedTree, setExpandedTree] = useState<Set<string>>(() => new Set(["fmcw"]));
+  const [expandedTree, setExpandedTree] = useState<Set<string>>(() => new Set([ACTIVE_PROFILE.initialization.rootNode.id]));
 
   const treeMatches = useMemo(() => {
     const query = treeQuery.trim().toLocaleLowerCase();

@@ -10,6 +10,7 @@ const write = (path, data) => { mkdirSync(dirname(resolve(path)), { recursive: t
 
 export async function runKnowmap({ action, input, output }) {
   if (action === "discover") return discoverKnowmap();
+  if (["design", "mvp", "full"].includes(action)) throw new Error("构建阶段禁止调用项目内已配置的 LLM Provider。请由宿主 LLM 按 plugin/SKILL.md 直接生成 JSON，再调用 validate-profile/validate；API Key 仅供生成应用交付后由用户配置。");
   if (!discoverKnowmap().inputSchema.properties.action.enum.includes(action)) throw new Error(`未知 action: ${action}`);
   if (!output) throw new Error("需要 --output");
   if (action !== "inject" && existsSync(resolve(output))) throw new Error("输出已存在；请指定新文件，避免覆盖检查点");
@@ -40,22 +41,7 @@ export async function runKnowmap({ action, input, output }) {
       if (JSON.stringify(repository.snapshot()) !== JSON.stringify(dataset)) throw new Error("运行时数据往返验证失败");
       return { output: target, totalNodes: dataset.nodes.length, warnings: report.warnings };
     }
-    const { RuntimeLlmConfigStore } = await load("/server/config/runtime-llm-config.ts");
-    const { createConfiguredLlmProvider } = await load("/server/llm/provider-factory.ts");
-    const provider = createConfiguredLlmProvider({ environment: new RuntimeLlmConfigStore(join(process.cwd(), "data", "runtime", "llm-config.json")).environment() });
-    if (!request.topic?.trim()) throw new Error("需要 topic");
-    if (action === "design") {
-      const { ProfileDesigner } = await load("/server/profile/profile-designer.ts");
-      const result = await new ProfileDesigner(provider, request.topic, request.taskDescription || request.topic).design();
-      validateProfile(result.profile); write(output, result.profile); return { output: resolve(output), warnings: result.warnings };
-    }
-    const profile = validateProfile(request.profile);
-    const { KnowledgeGenerator } = await load("/server/agent/knowledge-generator.ts");
-    const result = await new KnowledgeGenerator(provider, request.topic, profile, action === "mvp" ? "mvp" : "full").generate({
-      initialNetwork: request.network, confirmedMvp: request.confirmedMvp, onProgress: message => process.stderr.write(message + "\n"),
-    });
-    write(output, { topic: request.topic, profile, ...result });
-    return { output: resolve(output), totalNodes: result.totalNodes, converged: result.converged, stats: result.stats };
+    throw new Error(`未实现 action: ${action}`);
   });
 }
 

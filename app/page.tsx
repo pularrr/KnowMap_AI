@@ -11,6 +11,7 @@ import { createLayoutIndex } from "../features/knowledge-graph/layout/legacySvgL
 import { toLegacyKnowledgeNodes } from "../features/knowledge-graph/model/knowledgeViewModel";
 import type { KnowledgeDataset } from "../core/knowledge/schema";
 import { expandedKnowledgeDataset } from "../data/knowledge/deep-slices";
+import { ACTIVE_PROFILE } from "../profiles/active";
 
 // UI contract: 知识域树 · 复制 LaTeX · 展开字母与符号解释 · 开启或关闭连线流动 · 当前节点优先
 
@@ -18,8 +19,9 @@ type LlmStatus = { configured: boolean; provider: string; baseUrl: string; model
 
 export default function Home() {
   const [dataset, setDataset] = useState<KnowledgeDataset>(expandedKnowledgeDataset);
-  const [focusId, setFocusId] = useState("fmcw");
-  const [selectedId, setSelectedId] = useState("fmcw");
+  const rootNodeId = ACTIVE_PROFILE.initialization.rootNode.id;
+  const [focusId, setFocusId] = useState(rootNodeId);
+  const [selectedId, setSelectedId] = useState(rootNodeId);
   const [dark, setDark] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [configOpen, setConfigOpen] = useState(false);
@@ -30,14 +32,17 @@ export default function Home() {
 
   const nodes = useMemo(() => toLegacyKnowledgeNodes(dataset), [dataset]);
   const layoutIndex = useMemo(() => createLayoutIndex(nodes), [nodes]);
-  const selected = layoutIndex.nodeMap.get(selectedId) ?? layoutIndex.nodeMap.get("fmcw")!;
+  const selected = layoutIndex.nodeMap.get(selectedId) ?? layoutIndex.nodeMap.values().next().value!;
 
   const refreshDataset = useCallback(async () => {
     const response = await fetch("/api/knowledge", { cache: "no-store" });
     if (!response.ok) return;
     const result = await response.json() as { dataset: KnowledgeDataset };
     setDataset(result.dataset);
-  }, []);
+    const requested = new URLSearchParams(window.location.search).get("node");
+    const next = requested && result.dataset.nodes.some((node) => node.id === requested) ? requested : rootNodeId;
+    setFocusId(next); setSelectedId(next);
+  }, [rootNodeId]);
 
   useEffect(() => {
     loadTypography();
@@ -49,16 +54,14 @@ export default function Home() {
     setSessionId(storedSession);
     void refreshDataset();
     void fetch("/api/llm/config", { cache: "no-store" }).then((response) => response.json()).then(setLlmStatus).catch(() => undefined);
-    const requested = new URLSearchParams(window.location.search).get("node");
-    if (requested) { setFocusId(requested); setSelectedId(requested); }
   }, [refreshDataset]);
 
   useEffect(() => { document.documentElement.dataset.theme = dark ? "dark" : "light"; }, [dark]);
 
   useEffect(() => {
-    if (!layoutIndex.nodeMap.has(focusId)) setFocusId("fmcw");
-    if (!layoutIndex.nodeMap.has(selectedId)) setSelectedId("fmcw");
-  }, [focusId, selectedId, layoutIndex]);
+    if (!layoutIndex.nodeMap.has(focusId)) setFocusId(rootNodeId);
+    if (!layoutIndex.nodeMap.has(selectedId)) setSelectedId(rootNodeId);
+  }, [focusId, selectedId, layoutIndex, rootNodeId]);
 
   const reveal = (id: string) => {
     if (!layoutIndex.nodeMap.has(id)) return;

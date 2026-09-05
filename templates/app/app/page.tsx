@@ -10,8 +10,8 @@ import { KnowledgeTree } from "../features/knowledge-graph/components/KnowledgeT
 import { createLayoutIndex } from "../features/knowledge-graph/layout/legacySvgLayout";
 import { toLegacyKnowledgeNodes } from "../features/knowledge-graph/model/knowledgeViewModel";
 import type { KnowledgeDataset } from "../core/knowledge/schema";
-import { expandedKnowledgeDataset } from "../data/knowledge/initial-dataset";
-import { APP_CONFIG } from "./config";
+import { expandedKnowledgeDataset } from "../data/knowledge/deep-slices";
+import { ACTIVE_PROFILE } from "../profiles/active";
 
 // UI contract: 知识域树 · 复制 LaTeX · 展开字母与符号解释 · 开启或关闭连线流动 · 当前节点优先
 
@@ -19,8 +19,9 @@ type LlmStatus = { configured: boolean; provider: string; baseUrl: string; model
 
 export default function Home() {
   const [dataset, setDataset] = useState<KnowledgeDataset>(expandedKnowledgeDataset);
-  const [focusId, setFocusId] = useState<string>(APP_CONFIG.rootNodeId);
-  const [selectedId, setSelectedId] = useState<string>(APP_CONFIG.rootNodeId);
+  const rootNodeId = ACTIVE_PROFILE.initialization.rootNode.id;
+  const [focusId, setFocusId] = useState(rootNodeId);
+  const [selectedId, setSelectedId] = useState(rootNodeId);
   const [dark, setDark] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [configOpen, setConfigOpen] = useState(false);
@@ -31,35 +32,36 @@ export default function Home() {
 
   const nodes = useMemo(() => toLegacyKnowledgeNodes(dataset), [dataset]);
   const layoutIndex = useMemo(() => createLayoutIndex(nodes), [nodes]);
-  const selected = layoutIndex.nodeMap.get(selectedId) ?? layoutIndex.nodeMap.get(APP_CONFIG.rootNodeId)!;
+  const selected = layoutIndex.nodeMap.get(selectedId) ?? layoutIndex.nodeMap.values().next().value!;
 
   const refreshDataset = useCallback(async () => {
     const response = await fetch("/api/knowledge", { cache: "no-store" });
     if (!response.ok) return;
     const result = await response.json() as { dataset: KnowledgeDataset };
     setDataset(result.dataset);
-  }, []);
+    const requested = new URLSearchParams(window.location.search).get("node");
+    const next = requested && result.dataset.nodes.some((node) => node.id === requested) ? requested : rootNodeId;
+    setFocusId(next); setSelectedId(next);
+  }, [rootNodeId]);
 
   useEffect(() => {
     loadTypography();
     setDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
-    setLeftWidth(Number(window.localStorage.getItem(`${APP_CONFIG.storagePrefix}-left-width`)) || 250);
-    setRightWidth(Number(window.localStorage.getItem(`${APP_CONFIG.storagePrefix}-right-width`)) || 360);
-    const storedSession = window.localStorage.getItem(`${APP_CONFIG.storagePrefix}-session-id`) || crypto.randomUUID();
-    window.localStorage.setItem(`${APP_CONFIG.storagePrefix}-session-id`, storedSession);
+    setLeftWidth(Number(window.localStorage.getItem("fmcw-left-width")) || 250);
+    setRightWidth(Number(window.localStorage.getItem("fmcw-right-width")) || 360);
+    const storedSession = window.localStorage.getItem("fmcw-session-id") || crypto.randomUUID();
+    window.localStorage.setItem("fmcw-session-id", storedSession);
     setSessionId(storedSession);
     void refreshDataset();
     void fetch("/api/llm/config", { cache: "no-store" }).then((response) => response.json()).then(setLlmStatus).catch(() => undefined);
-    const requested = new URLSearchParams(window.location.search).get("node");
-    if (requested) { setFocusId(requested); setSelectedId(requested); }
   }, [refreshDataset]);
 
   useEffect(() => { document.documentElement.dataset.theme = dark ? "dark" : "light"; }, [dark]);
 
   useEffect(() => {
-    if (!layoutIndex.nodeMap.has(focusId)) setFocusId(APP_CONFIG.rootNodeId);
-    if (!layoutIndex.nodeMap.has(selectedId)) setSelectedId(APP_CONFIG.rootNodeId);
-  }, [focusId, selectedId, layoutIndex]);
+    if (!layoutIndex.nodeMap.has(focusId)) setFocusId(rootNodeId);
+    if (!layoutIndex.nodeMap.has(selectedId)) setSelectedId(rootNodeId);
+  }, [focusId, selectedId, layoutIndex, rootNodeId]);
 
   const reveal = (id: string) => {
     if (!layoutIndex.nodeMap.has(id)) return;
@@ -81,7 +83,7 @@ export default function Home() {
     };
     const stop = () => {
       window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop);
-      window.localStorage.setItem(side === "left" ? `${APP_CONFIG.storagePrefix}-left-width` : `${APP_CONFIG.storagePrefix}-right-width`, String(lastWidth));
+      window.localStorage.setItem(side === "left" ? "fmcw-left-width" : "fmcw-right-width", String(lastWidth));
     };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop, { once: true });
   };
@@ -97,7 +99,7 @@ export default function Home() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div className="brand-block"><div className="brand-mark" aria-hidden="true"><span /><span /><span /></div><div><div className="eyebrow">{APP_CONFIG.eyebrow}</div><h1>{APP_CONFIG.appName} <em>AI</em></h1></div></div>
+        <div className="brand-block"><div className="brand-mark" aria-hidden="true"><span /><span /><span /></div><div><div className="eyebrow">RADAR SYSTEMS · KNOWLEDGE GRAPH</div><h1>FMCW 雷达全栈知识图谱 <em>AI</em></h1></div></div>
         <div className="top-actions">
           <div className="graph-stat"><b>{nodes.length}</b><span>知识节点</span></div><div className="graph-stat"><b>{dataset.domains.length}</b><span>知识域</span></div>
           <button className={`ai-config-button ${llmStatus.configured ? "configured" : ""}`} onClick={() => setConfigOpen(true)}><i />{llmStatus.configured ? "设置 · " + llmStatus.model : "设置 · AI 配置"}</button>
@@ -106,7 +108,7 @@ export default function Home() {
         </div>
       </header>
 
-      <section className="workspace" style={workspaceStyle} aria-label={`${APP_CONFIG.appName}工作区`}>
+      <section className="workspace" style={workspaceStyle} aria-label="FMCW 雷达知识图谱工作区">
         <KnowledgeTree focusId={focusId} selectedId={selectedId} onReveal={reveal} nodes={nodes} layoutIndex={layoutIndex} />
         <div className="resize-handle left" role="separator" tabIndex={0} aria-label="调整左侧宽度" onPointerDown={(event) => startResize("left", event)} onKeyDown={(event) => { if (event.key === "ArrowLeft") resizeByKeyboard("left", -1); if (event.key === "ArrowRight") resizeByKeyboard("left", 1); }} />
         <div className="graph-workbench"><KnowledgeGraphCanvas focusId={focusId} selectedId={selectedId} onSelect={setSelectedId} onReveal={reveal} dataset={dataset} layoutIndex={layoutIndex} /><AgentPanel selected={selected} sessionId={sessionId} onReveal={reveal} onCommitted={refreshDataset} /></div>

@@ -1,0 +1,21 @@
+{
+  "name": "knowmap-plugin",
+  "version": "0.1.0",
+  "description": "从自然语言主题设计 Profile、生成并确认 MVP、构建和校验知识网络应用。",
+  "author": {
+    "name": "knowmap-agent"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "KnowMap",
+    "shortDescription": "从主题生成可运行的 AI 知识网络应用。",
+    "longDescription": "让 Codex 根据自然语言任务调用仓库中的 KnowMap 构建流程，完成 Profile、MVP、完整研究、校验和应用注入。",
+    "developerName": "knowmap-agent",
+    "category": "Productivity",
+    "capabilities": ["Profile design", "Knowledge network generation", "Application scaffolding"],
+    "defaultPrompt": [
+      "根据我给出的主题设计知识网络 Profile，并生成 MVP。",
+      "继续开发我已确认的 MVP，生成完整知识网络应用。"
+    ]
+  }
+}

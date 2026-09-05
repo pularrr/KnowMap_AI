@@ -33,7 +33,7 @@ export function KnowledgeCardPanel({ selectedId, onReveal, dataset = expandedKno
   const [saveError, setSaveError] = useState("");
   const nodes = useMemo(() => toLegacyKnowledgeNodes(dataset), [dataset]);
   const index = useMemo(() => layoutIndex ?? createLayoutIndex(nodes), [layoutIndex, nodes]);
-  const selected = index.nodeMap.get(selectedId) ?? index.nodeMap.get("fmcw")!;
+  const selected = index.nodeMap.get(selectedId) ?? index.nodeMap.values().next().value!;
   const selectedAncestors = ancestorsOf(selected.id, index);
   const selectedChildren = index.childrenMap.get(selected.id) ?? [];
   const card = getKnowledgeCardFromDataset(dataset, selected.id);

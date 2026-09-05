@@ -42,6 +42,7 @@
     ".sites-runtime",
     "dist",
     "templates",
+    "adapters",
     "work"
   ]
 }

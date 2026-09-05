@@ -5,14 +5,15 @@ export function discoverKnowmap() {
     name: "knowmap_plugin",
     description: "从用户主题设计 Profile，生成并确认 MVP，研究完整知识网络，校验后交付可运行的知识图谱应用。已有应用内问答请使用运行时 API。",
     inputSchema: { type: "object", properties: {
-      action: { type: "string", enum: ["profile-example", "design", "validate-profile", "mvp", "full", "validate", "inject"] },
+      action: { type: "string", enum: ["profile-example", "validate-profile", "validate", "inject"] },
       input: { type: "string", description: "本地 JSON 输入文件绝对路径；profile-example 可省略" },
       output: { type: "string", description: "新的输出文件；inject 时为已有应用目录" },
     }, required: ["action", "output"], additionalProperties: false },
     entrypoint: "node scripts/knowmap.mjs <action> --input <json-file> --output <path>",
     skill: "plugin/SKILL.md", scaffold: "node scripts/create-app.mjs --profile-file <profile.json> --name <name> --output <directory>",
-    requirements: { localTools: true, node: ">=22.13.0", dependencies: "npm install", generationProtocol: "Responses API with structured JSON output; web_search is optional" },
-    limits: ["宿主必须显式注册此描述或加载 SKILL.md；模型不会自行扫描磁盘。", "发现接口不安装插件、不配置密钥、不证明所有模型或 API 协议兼容。", "full 需要确认过的 MVP；研究上限35分钟，节点数量是建议目标。"],
+    hostResponsibilities: ["宿主 LLM 直接生成 Profile、MVP 和完整 network JSON。", "构建期不得调用项目 data/runtime/llm-config.json 或环境中的付费 Provider。", "所有中间产物和新应用必须位于项目根目录之外的新隔离目录。"],
+    requirements: { localTools: true, node: ">=22.13.0", dependencies: "npm install" },
+    limits: ["宿主必须显式注册此描述或加载 SKILL.md；模型不会自行扫描磁盘。", "13 个栏目是当前渲染器支持的分类词表，不是每个任务必须填满的模板；宿主按任务选择子集。", "API Key 仅由用户在生成应用交付后配置。"],
   };
 }
 export default discoverKnowmap;

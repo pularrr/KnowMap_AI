@@ -23,6 +23,8 @@ export async function createApp({ profile: profileId, profileFile, name, output 
   if (profileId && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(profileId)) throw new Error("无效 Profile ID");
   const target = resolve(output || name);
   if (existsSync(target)) throw new Error(`输出目录已存在: ${target}`);
+  const relativeToProject = relative(projectRoot, target);
+  if (relativeToProject === "" || (!relativeToProject.startsWith("..") && !isAbsolute(relativeToProject))) throw new Error("生成应用必须位于 KnowMap/Skill 项目根目录之外的全新隔离目录");
   const template = join(projectRoot, "templates", "app");
   for (const folder of ["templates/app", "core", "server", "features", "plugin", "profiles", "scripts", "data/knowledge", "app/api"]) {
     const inside = relative(join(projectRoot, folder), target);
@@ -50,7 +52,7 @@ export async function createApp({ profile: profileId, profileFile, name, output 
     cpSync(join(projectRoot, "app/api"), join(target, "app/api"));
     mkdirSync(join(target, "profiles"), { recursive: true });
     writeFileSync(join(target, "profiles/active.json"), JSON.stringify(profile, null, 2));
-    writeFileSync(join(target, "profiles/active.ts"), 'import profile from "./active.json";\nimport type { TaskProfile } from "../plugin/contracts/task-profile";\nexport const ACTIVE_PROFILE = profile as TaskProfile;\n');
+    writeFileSync(join(target, "profiles/active.ts"), 'import profile from "./active.json";\nimport type { TaskProfile } from "../plugin/contracts/task-profile";\nexport const ACTIVE_PROFILE = profile as unknown as TaskProfile;\n');
     const config = { appName: profile.name, appSubtitle: profile.description, rootNodeId: profile.initialization.rootNode.id,
       storagePrefix: name, eyebrow: "KNOWLEDGE GRAPH · AI ASSISTANT" };
     writeFileSync(join(target, "app/config.ts"), `export const APP_CONFIG = ${JSON.stringify(config, null, 2)} as const;\n`);

@@ -59,7 +59,7 @@ export function KnowledgeGraphCanvas({
 
   const activeNodeMap = layoutIndex?.nodeMap ?? nodeMap;
   const activeChildrenMap = layoutIndex?.childrenMap ?? childrenMap;
-  const focus = activeNodeMap.get(focusId) ?? activeNodeMap.get("fmcw")!;
+  const focus = activeNodeMap.get(focusId) ?? activeNodeMap.values().next().value!;
   const selected = activeNodeMap.get(selectedId) ?? focus;
   const positioned = useMemo(() => arrange(focus, layoutIndex), [focus, layoutIndex]);
   const positionedMap = useMemo(

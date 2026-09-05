@@ -339,7 +339,7 @@ P3-2 的核心工作是把**主题相关的硬编码**抽取为 Profile 配置�
 
 本版本不更换现有节点组件、知识卡组件和关系连线。目标是把代码仓库转换为同一套 `nodes + cards + typed edges + evidence`，并支持针对项目代码提问。
 
-1. **动态项目 Profile**：由配置的付费 LLM 根据仓库类型生成 CodeGraph Profile，包括 module/file/class/function/operator/dataset 等节点类型、关系类型和代码知识卡栏目；通过确定性 schema 校验和用户确认后锁定，不为每种项目硬编码唯一 Profile。
+1. **动态项目 Profile**：由当前宿主 LLM 根据仓库类型生成 CodeGraph Profile，包括 module/file/class/function/operator/dataset 等节点类型、关系类型和代码知识卡栏目；构建过程禁止调用 KnowMap 项目已配置的 DeepSeek/其他 Provider。通过确定性 schema 校验和用户确认后锁定，不为每种项目硬编码唯一 Profile。
 2. **源码事实适配器**：新增 `SourceAdapter` 和语言适配层，先用 AST、语言服务或静态分析提取文件、符号、import、调用、参数、返回值及源码范围。LLM 负责语义解释，不覆盖解析器事实。
 3. **模型生成提取计划**：LLM 根据项目生成 include/exclude、解析器选择、符号粒度和语义分析项目；宿主验证路径、工具和预算后执行，仓库内容一律按不可信输入处理。
 4. **关系投影底线**：节点 ID 唯一；边的两端必须存在；源码事实关系带文件、符号、行号和 Git revision；CALLS/INPUT_TO/OUTPUT_OF/FLOWS_TO 保持方向；多输入、循环和反馈边不得压成单一父子关系；无法由解析器验证的关系标记为 semantic-inference。

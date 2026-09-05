@@ -5,12 +5,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withProjectModules } from "../scripts/lib/project-modules.mjs";
 import { discoverKnowmap } from "../plugin/discovery.mjs";
+import { runKnowmap } from "../scripts/knowmap.mjs";
+import { createApp } from "../scripts/create-app.mjs";
 
 test("discovery exposes an executable host-neutral contract", () => {
   const d = discoverKnowmap();
-  assert.ok(d.inputSchema.properties.action.enum.includes("full"));
+  assert.equal(d.inputSchema.properties.action.enum.includes("full"), false);
   assert.ok(d.inputSchema.properties.action.enum.includes("inject"));
   assert.equal(d.inputSchema.additionalProperties, false);
+  assert.match(d.hostResponsibilities.join(" "), /宿主 LLM/);
+});
+
+test("build-time provider actions are rejected before reading project configuration", async () => {
+  await assert.rejects(runKnowmap({ action:"full", input:"missing.json", output:"missing-output.json" }), /禁止调用项目内已配置/);
+});
+
+test("generated applications cannot be placed inside the KnowMap skill project", async () => {
+  await assert.rejects(createApp({ profile:"fmcw-radar", name:"forbidden-inside", output:join(process.cwd(), "work", "forbidden-inside") }), /项目根目录之外/);
 });
 
 test("non-FMCW generation preserves hierarchy, cards, evidence and the MVP boundary", async () => {
