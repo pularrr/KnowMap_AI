@@ -6,7 +6,7 @@ import type { StagedKnowledgeImport } from "../../core/ingestion/contracts";
 import type { ResearchDocument } from "./research-output";
 
 const normalize = (value: string) => value.normalize("NFKC").trim().toLowerCase().replace(/\s+/g, "");
-const nodeTypes = new Set(["domain","problem","concept","method","algorithm","model","component","artifact","parameter","metric","application"]);
+const nodeTypes = new Set(["domain","category","problem","concept","method","algorithm","model","component","artifact","parameter","metric","application"]);
 const edgeTypes = new Set(["SIMILAR_TO","ALTERNATIVE_TO","PREREQUISITE_OF","PART_OF","INPUT_TO","OUTPUT_OF","USES_MODEL","IMPLEMENTS","DERIVED_FROM","AFFECTS","MITIGATES","EVALUATED_BY"]);
 
 export function operationsFromResearch(document: ResearchDocument, dataset: KnowledgeDataset, currentNodeId: string, staged?: StagedKnowledgeImport) {
@@ -54,6 +54,19 @@ export function operationsFromResearch(document: ResearchDocument, dataset: Know
     if (!nodes.has(id) && !additions.has(id)) additions.set(id,proposed);
   }
   const resolve = (value: string) => refs.get(normalize(value)) ?? (nodes.has(value) ? value : undefined);
+  const plannedCategoryIds: string[] = [];
+  for (const plan of document.categoryPlan ?? []) {
+    const parentId = resolve(plan.parentId);
+    if (!parentId) throw new Error("分类计划引用未知父节点：" + plan.parentId);
+    for (const categoryName of plan.categories) {
+      const existing = resolve(categoryName);
+      if (existing) { plannedCategoryIds.push(existing); continue; }
+      const id = deterministicId("knowledge", normalize(categoryName));
+      refs.set(normalize(categoryName), id);
+      additions.set(id, { canonicalName: categoryName, shortFact: `用于归组“${nodes.get(parentId)?.canonicalName ?? parentId}”下的相关知识。`, nodeType: "category", parentId, blocks: [] });
+      plannedCategoryIds.push(id);
+    }
+  }
   let order = Math.max(...dataset.nodes.map((node) => node.order),0) + 1;
   while (additions.size) {
     let progress = false;
@@ -68,10 +81,25 @@ export function operationsFromResearch(document: ResearchDocument, dataset: Know
     }
     if (!progress) throw new Error("候选父子关系无法解析（未知父节点或循环）：" + [...additions.values()].map((n) => n.canonicalName + " → " + n.parentId).join("；").slice(0,1000));
   }
+  for (const plan of document.categoryPlan ?? []) {
+    for (const hint of plan.reparentHints ?? []) {
+      const leafId = resolve(hint.leafName), categoryId = resolve(hint.toCategory);
+      const leaf = leafId ? nodes.get(leafId) : undefined;
+      const category = categoryId ? nodes.get(categoryId) : undefined;
+      if (!leaf || !category || category.nodeType !== "category") throw new Error(`分类重挂载无法解析：${hint.leafName} → ${hint.toCategory}`);
+      if (dataset.nodes.some((node) => node.primaryParentId === leaf.id)) throw new Error(`分类重挂载只能移动叶子节点：${leaf.canonicalName}`);
+      const updated = { ...leaf, primaryParentId: category.id, domainId: category.domainId, visualBranch: category.visualBranch, level: category.level + 1 };
+      nodes.set(updated.id, updated); operations.push({ kind:"upsert-node", node:updated });
+    }
+  }
   for (const proposed of p.newNodes) {
     const id = resolve(proposed.canonicalName)!;
     addBlock(id,{ type:"definition",title:"定义与边界",text:proposed.shortFact });
     for (const block of proposed.blocks) addBlock(id,block);
+  }
+  for (const categoryId of plannedCategoryIds) {
+    const category = nodes.get(categoryId);
+    if (category) addBlock(categoryId, { type:"definition", title:"分类边界", text:category.shortFact });
   }
   for (const block of p.cardBlocks) {
     const id = block.nodeId ? resolve(block.nodeId) : currentNodeId;

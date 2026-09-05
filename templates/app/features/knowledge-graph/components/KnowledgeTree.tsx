@@ -72,7 +72,7 @@ export function KnowledgeTree({ focusId, selectedId, onReveal, nodes = knowledge
                 <i style={{ background: branchMeta[node.branch].color }} />
                 <span>
                   <b>{node.title}</b>
-                  <small>{node.subtitle}</small>
+                  <small>{node.subtitle.length > 16 ? `${node.subtitle.slice(0, 16)}…` : node.subtitle}</small>
                 </span>
               </button>
             ))}

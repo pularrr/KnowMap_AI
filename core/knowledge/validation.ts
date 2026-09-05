@@ -47,6 +47,8 @@ export function validateKnowledgeDataset(dataset: KnowledgeDataset, options?: Va
   // 未提供时使用 FMCW 默认值（11 域、5 分支），保持向后兼容
   const expectedDomainCount = options?.domainCount ?? options?.profile?.validation.domainCount ?? ACTIVE_PROFILE.validation.domainCount;
   const expectedVisualBranchCount = options?.visualBranchCount ?? options?.profile?.validation.visualBranchCount ?? ACTIVE_PROFILE.validation.visualBranchCount;
+  const maxPrimaryChildren = options?.profile?.validation.maxPrimaryChildren ?? 8;
+  const hierarchy = options?.profile?.hierarchy;
 
   const domainIds = new Set<string>();
   for (const domain of dataset.domains) {
@@ -100,6 +102,36 @@ export function validateKnowledgeDataset(dataset: KnowledgeDataset, options?: Va
           `problem 节点"${node.canonicalName}"的 shortFact 可能混入了解决方法。problem 节点只应描述问题/现象本身（定义、原因、影响）；解决方法必须是独立的 method/algorithm 节点，通过 MITIGATES 等关系关联。`,
           node.id);
       }
+    }
+  }
+  const childrenByParent = new Map<string, (typeof dataset.nodes)[number][]>();
+  for (const node of dataset.nodes) {
+    if (!node.primaryParentId) continue;
+    childrenByParent.set(node.primaryParentId, [...(childrenByParent.get(node.primaryParentId) ?? []), node]);
+  }
+  for (const [parentId, children] of childrenByParent) {
+    const parent = nodeById.get(parentId);
+    if (!parent || children.length <= maxPrimaryChildren) continue;
+    add("warning", "TOO_MANY_PRIMARY_CHILDREN",
+      `父节点“${parent.canonicalName}”有 ${children.length} 个直接子节点，建议不超过 ${maxPrimaryChildren} 个。请先按一个稳定维度建立 2–${maxPrimaryChildren} 个 category 中间节点，再把细粒度节点归入类别。`,
+      parentId);
+    const leafConcepts = children.filter((child) => child.nodeType === "concept" && !(childrenByParent.get(child.id)?.length)).length;
+    if (leafConcepts / children.length >= 0.75) {
+      add("warning", "FLAT_CONCEPT_CLUSTER",
+        `父节点“${parent.canonicalName}”的直接子节点主要是叶子概念（${leafConcepts}/${children.length}），层级可能过平。应先识别概念族、阶段、机制或子系统，再展开具体概念。`,
+        parentId);
+    }
+  }
+  if (hierarchy?.enabled) {
+    const intermediateTypes = new Set(hierarchy.intermediateNodeTypes);
+    for (const node of dataset.nodes) {
+      if (!intermediateTypes.has(node.nodeType)) continue;
+      const members = childrenByParent.get(node.id) ?? [];
+      if (!members.length) add("warning", "EMPTY_INTERMEDIATE_CATEGORY", `中间节点“${node.canonicalName}”没有子节点，应补充成员或移除。`, node.id);
+      if (hierarchy.minMembersPerIntermediate && members.length < hierarchy.minMembersPerIntermediate) {
+        add("warning", "SPARSE_INTERMEDIATE_CATEGORY", `中间节点“${node.canonicalName}”只有 ${members.length} 个子节点，低于 Profile 的建议值 ${hierarchy.minMembersPerIntermediate}。请确认其边界是否足够独立。`, node.id);
+      }
+      if (hierarchy.maxDepth && node.level > hierarchy.maxDepth) add("warning", "HIERARCHY_TOO_DEEP", `节点“${node.canonicalName}”位于第 ${node.level} 层，超过 Profile 建议深度 ${hierarchy.maxDepth}。`, node.id);
     }
   }
   const roots = dataset.nodes.filter((node) => node.primaryParentId === null);

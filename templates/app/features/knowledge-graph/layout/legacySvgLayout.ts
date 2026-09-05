@@ -8,9 +8,10 @@ export type PositionedNode = KnowledgeNode & {
   role: "previous" | "focus" | "next";
 };
 
-export const WORLD = { width: 1100, height: 680 };
+export const WORLD = { width: 1400, height: 680 };
 export const NODE_W = 252;
 export const NODE_H = 64;
+export const MAX_NODES_PER_LANE = 8;
 
 export const nodeMap = new Map(knowledgeNodes.map((node) => [node.id, node]));
 export const childrenMap = new Map<string, KnowledgeNode[]>();
@@ -81,17 +82,33 @@ export function arrange(focus: KnowledgeNode, index: LayoutIndex = defaultIndex)
   // Keep the most relevant four depths when a deep node is opened.  Columns
   // are still level-pure; no ancestor sibling can leak into a child column.
   const visibleColumns = columns.slice(-4);
+  const directChildLaneCount = Math.ceil(focusChildren.length / MAX_NODES_PER_LANE);
+  const layoutColumns = directChildLaneCount > 1
+    ? visibleColumns.slice(-2)
+    : visibleColumns;
+  const displayColumns = layoutColumns.flatMap((column, logicalIndex) => {
+    const sorted = [...column].sort((left, right) => left.id === focus.id ? -1 : right.id === focus.id ? 1 : left.title.localeCompare(right.title, "zh-CN"));
+    const lanes = Array.from({ length: Math.ceil(sorted.length / MAX_NODES_PER_LANE) }, (_, laneIndex) =>
+      sorted.slice(laneIndex * MAX_NODES_PER_LANE, (laneIndex + 1) * MAX_NODES_PER_LANE),
+    );
+    // Ancestor context keeps only the lane containing the lineage node. The
+    // focus's direct children use every lane, so the next depth always starts
+    // after all same-depth lanes.
+    if (logicalIndex < layoutColumns.length - 1 && lanes.length > 1) {
+      return [lanes.find((lane) => lane.some((node) => lineage.some((item) => item.id === node.id))) ?? lanes[0]];
+    }
+    return lanes;
+  });
   const gutter = 22;
   const availableWidth = WORLD.width - NODE_W;
-  const columnGap = visibleColumns.length > 1
-    ? Math.min(NODE_W + gutter, availableWidth / (visibleColumns.length - 1))
+  const columnGap = displayColumns.length > 1
+    ? Math.min(NODE_W + gutter, availableWidth / (displayColumns.length - 1))
     : 0;
-  const contentWidth = NODE_W + columnGap * Math.max(0, visibleColumns.length - 1);
+  const contentWidth = NODE_W + columnGap * Math.max(0, displayColumns.length - 1);
   const firstX = Math.max(24, (WORLD.width - contentWidth) / 2);
   const result: PositionedNode[] = [];
 
-  visibleColumns.forEach((column, columnIndex) => {
-    const sorted = [...column].sort((left, right) => left.id === focus.id ? -1 : right.id === focus.id ? 1 : left.title.localeCompare(right.title, "zh-CN"));
+  displayColumns.forEach((sorted, columnIndex) => {
     const gap = Math.min(82, 560 / Math.max(1, sorted.length - 1));
     const startY = WORLD.height / 2 - NODE_H / 2 - ((sorted.length - 1) * gap) / 2;
     const x = firstX + columnIndex * columnGap;
@@ -100,7 +117,7 @@ export function arrange(focus: KnowledgeNode, index: LayoutIndex = defaultIndex)
         ...node,
         x,
         y: startY + rowIndex * gap,
-        role: node.id === focus.id ? "focus" : columnIndex === visibleColumns.length - 1 && focusChildren.some((child) => child.id === node.id) ? "next" : "previous",
+        role: node.id === focus.id ? "focus" : focusChildren.some((child) => child.id === node.id) ? "next" : "previous",
       });
     });
   });

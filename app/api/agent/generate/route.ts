@@ -15,16 +15,15 @@ import { validateProfile } from "../../../../server/profile/validate-profile";
 import { runtimeLlmConfigStore } from "../../../../server/runtime/app-runtime";
 import { createConfiguredLlmProvider } from "../../../../server/llm/provider-factory";
 import type { TaskProfile } from "../../../../plugin/contracts/task-profile";
+import { verifyMvpToken } from "../../../../server/agent/mvp-confirmation";
 
 export const runtime = "nodejs";
-export const maxDuration = 300; // 5 分钟超时（MVP 模式）
-// 完整开发模式需要更长时间，实际部署时应使用后台任务
+export const maxDuration = 800; // MVP 与完整开发共用；完整开发为长任务，生产环境应走后台任务
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { topic, profile: customProfile, profileId, mode = "mvp", writeToFile = false, initialNetwork, confirmedMvp } = body;
-    if (mode !== "mvp") return NextResponse.json({ error: "完整开发请使用 scripts/knowmap.mjs full，避免5分钟HTTP请求限制。" }, { status: 400 });
+    const { topic, profile: customProfile, profileId, mode = "mvp", writeToFile = false, initialNetwork, confirmedMvp, mvpConfirmationToken } = body;
 
     if (!topic) {
       return NextResponse.json(
@@ -45,12 +44,22 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    profile = validateProfile(profile);
+
+    // 确认门：完整开发必须先由用户验收 MVP（拿到不可抵赖的确认令牌），令牌需与 initialNetwork 匹配
+    if (mode === "full") {
+      if (!initialNetwork) {
+        return NextResponse.json({ error: "完整开发需要已验收的 MVP 网络(initialNetwork)" }, { status: 400 });
+      }
+      if (!mvpConfirmationToken || !verifyMvpToken(mvpConfirmationToken, profile.id, initialNetwork)) {
+        return NextResponse.json({ error: "需先由用户验收 MVP（拿到确认令牌）才能进行完整生成；令牌无效或与 initialNetwork 不匹配" }, { status: 400 });
+      }
+    }
 
     // 使用统一的 LlmProvider（自动处理推理模型兼容、tool_choice 剥离等）
-    profile = validateProfile(profile);
     const provider = createConfiguredLlmProvider({ environment: runtimeLlmConfigStore().environment() });
     const generator = new KnowledgeGenerator(provider, topic, profile, mode);
-    const result = await generator.generate({ initialNetwork, confirmedMvp, signal: request.signal });
+    const result = await generator.generate({ initialNetwork, confirmedMvp: mode === "full" ? true : Boolean(confirmedMvp), signal: request.signal });
 
     let filePath: string | undefined;
     if (writeToFile) {

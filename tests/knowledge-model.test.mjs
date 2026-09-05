@@ -59,6 +59,19 @@ test("legacy and expanded datasets satisfy the knowledge validator", () => {
   }
 });
 
+test("validator reports overly broad parents and flat concept clusters", () => {
+  const dataset = structuredClone(migration.legacyKnowledgeDataset);
+  const parent = dataset.nodes.find((node) => node.id === "fmcw");
+  const cluster = { ...parent, id:"flat-cluster", canonicalName:"测试类别", nodeType:"category", primaryParentId:parent.id, level:1, order:899, legacyId:undefined };
+  dataset.nodes.push(cluster);
+  for (let index = 0; index < 9; index += 1) {
+    dataset.nodes.push({ ...parent, id:`flat-${index}`, canonicalName:`细概念${index}`, nodeType:"concept", primaryParentId:cluster.id, level:2, order:900+index, legacyId:undefined });
+  }
+  const report = validateKnowledgeDataset(dataset);
+  assert.ok(report.warnings.some((issue) => issue.code === "TOO_MANY_PRIMARY_CHILDREN" && issue.entityId === cluster.id));
+  assert.ok(report.warnings.some((issue) => issue.code === "FLAT_CONCEPT_CLUSTER" && issue.entityId === cluster.id));
+});
+
 test("the independent seed patch adds 16 entities and corrects the two target hierarchies", () => {
   const dataset = slices.expandedKnowledgeDataset;
   const byId = new Map(dataset.nodes.map((node) => [node.id, node]));

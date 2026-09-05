@@ -17,6 +17,11 @@ const node = z.object({
 export const researchSchema = z.object({
   answer: z.string().default(""), coverageAssessment: z.string().default(""),
   converged: z.boolean().default(false), gaps: z.array(z.string()).default([]),
+  categoryPlan: z.array(z.object({
+    parentId: z.string(),
+    categories: z.array(z.string()),
+    reparentHints: z.array(z.object({ leafName: z.string(), toCategory: z.string() })).optional(),
+  })).optional(),
   proposal: z.object({
     summary: z.string().default("知识扩充"), rationale: z.string().default(""),
     cardBlocks: z.array(block).max(100).default([]), newNodes: z.array(node).max(100).default([]),
@@ -98,8 +103,8 @@ export function normalizeResearch(value: unknown): ResearchDocument {
 }
 
 export const RESEARCH_CONTRACT = `返回 JSON 对象：
-{"answer":"研究小结","coverageAssessment":"已覆盖与缺口","converged":false,"gaps":["仍需探索的问题"],"proposal":{"summary":"摘要","rationale":"理由","newNodes":[{"id":"稳定英文或拼音ID","canonicalName":"具体名称","shortFact":"定义","nodeType":"concept|method|algorithm|model|problem|parameter|metric|application|component|artifact","parentId":"已有或本批新父节点ID","blocks":[{"type":"definition","title":"定义与边界","text":"完整知识"}]}],"cardBlocks":[{"nodeId":"节点ID","type":"principle","title":"原理","text":"完整知识"}],"relations":[{"sourceId":"节点ID","targetId":"节点ID","type":"PREREQUISITE_OF","rationale":"方向和理由"}],"evidence":[{"title":"真实来源或模型领域知识","url":"仅在已核实时填写","note":"来源支持什么；未经外部检索明确标注模型知识待核验"}]}}。
-栏目可用 definition,principle,assumptions,comparison,inputs_outputs,procedure,engineering_tradeoff,failure_mode,validation,application,research_topic,code,misconception。按本次批次上限生成有实质内容的节点，每节点至少定义及原理/边界；没有足够新增知识时允许少量或零个节点。只在没有实质缺口时 converged=true。纯 JSON，不含思维过程；字符串内的换行及 LaTeX 反斜杠必须按 JSON 转义。不要假装查阅过未获得的网页。`;
+{"answer":"研究小结","coverageAssessment":"已覆盖与缺口","converged":false,"gaps":["仍需探索的问题"],"proposal":{"summary":"摘要","rationale":"理由","newNodes":[{"id":"稳定英文或拼音ID","canonicalName":"具体名称","shortFact":"定义","nodeType":"concept|method|algorithm|model|problem|parameter|metric|application|component|artifact|category","parentId":"已有或本批新父节点ID","blocks":[{"type":"definition","title":"定义与边界","text":"完整知识"}]}],"cardBlocks":[{"nodeId":"节点ID","type":"principle","title":"原理","text":"完整知识"}],"relations":[{"sourceId":"节点ID","targetId":"节点ID","type":"PREREQUISITE_OF","rationale":"方向和理由"}],"evidence":[{"title":"真实来源或模型领域知识","url":"仅在已核实时填写","note":"来源支持什么；未经外部检索明确标注模型知识待核验"}]}}。
+栏目可用 definition,principle,assumptions,comparison,inputs_outputs,procedure,engineering_tradeoff,failure_mode,validation,application,research_topic,code,misconception。按本次批次上限生成有实质内容的节点，每节点至少定义及原理/边界；没有足够新增知识时允许少量或零个节点。不要过早 converged=true；只有当所有直接父节点都已建立 category 且每个 category 已有 ≥2 叶子时才允许收敛。纯 JSON，不含思维过程；字符串内的换行及 LaTeX 反斜杠必须按 JSON 转义。不要假装查阅过未获得的网页。`;
 
 export async function requestResearch(provider: LlmProvider, instructions: string, messages: LlmMessage[], options: { tokens?: number; signal?: AbortSignal; onCall?: () => void; onDiagnostic?: (message: string) => void } = {}): Promise<{ document: ResearchDocument; response: LlmResponseResult }> {
   let repair = "";
@@ -109,7 +114,7 @@ export async function requestResearch(provider: LlmProvider, instructions: strin
   for (let attempt = 0; attempt < 3; attempt++) {
     options.signal?.throwIfAborted();
     options.onCall?.();
-    const batchInstructions = instructions + "\n" + RESEARCH_CONTRACT + "\n本批最多 " + (attempt ? 2 : 4) + " 个新节点、" + (attempt ? 3 : 6) + " 个独立卡片补充。优先完整输出，更多知识留在 gaps 中由下一轮继续；不要为凑数量建节点。每项正文控制在600字以内。";
+    const batchInstructions = instructions + "\n" + RESEARCH_CONTRACT + "\n本批最多 " + (attempt ? 3 : 6) + " 个新节点、" + (attempt ? 4 : 8) + " 个独立卡片补充。优先完整输出，更多知识留在 gaps 中由下一轮继续；不要为凑数量建节点。每项正文控制在600字以内。";
     const response = await provider.createResponse({
       instructions: batchInstructions,
       messages: fitResearchMessages(messages,batchInstructions,repair,provider.limits?.maxInputChars ?? 120000),

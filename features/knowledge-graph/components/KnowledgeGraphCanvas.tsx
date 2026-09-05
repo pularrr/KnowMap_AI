@@ -222,7 +222,7 @@ export function KnowledgeGraphCanvas({
         </defs>
         <rect width={WORLD.width} height={WORLD.height} fill="url(#grid)" />
         <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}>
-          <g className="radar-rings" transform="translate(515 340)">
+          <g className="radar-rings" transform={`translate(${WORLD.width / 2} ${WORLD.height / 2})`}>
             <circle r="115" />
             <circle r="220" />
             <circle r="330" />

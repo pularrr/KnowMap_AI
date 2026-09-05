@@ -52,7 +52,17 @@ export interface ValidationConfig {
   domainCount: number;           // 域数量（FMCW=11）
   visualBranchCount: number;     // 视觉分支数量（FMCW=5）
   rootNodeRequired: boolean;     // 是否必须有唯一根节点
+  maxPrimaryChildren?: number;  // 单个父节点建议的直接子节点上限，默认 8
   extraRules?: string[];         // 主题特定的额外审查规则描述
+}
+
+/** 导航树的组织策略。知识主题可使用 category；代码图等任务可声明自身的中间层类型。 */
+export interface HierarchyConfig {
+  enabled: boolean;
+  intermediateNodeTypes: string[];
+  planningThreshold?: number; // 达到此数量时提示先设计归组，默认 6
+  maxDepth?: number;          // 建议最大主树深度，默认 6
+  minMembersPerIntermediate?: number; // 可选；不设置时单叶类别合法
 }
 
 /** 提示词配置 —— 通用基础提示词 + 主题追加指令 */
@@ -103,6 +113,7 @@ export interface TaskProfile {
 
   // 审查与提示词
   validation: ValidationConfig;
+  hierarchy?: HierarchyConfig;
   prompts: PromptConfig;
 
   // 初始化策略
@@ -121,6 +132,7 @@ export interface TaskProfile {
  */
 export const BASE_NODE_TYPES: NodeTypeDef[] = [
   { type: "domain", label: "知识域", singular: "一个知识域", forbidden: [], note: "分类节点，用于组织子节点，不承载具体知识内容", isGranularSensitive: false },
+  { type: "category", label: "知识类别", singular: "一个可命名的知识类别", forbidden: ["具体知识细节", "多个分类维度"], note: "中间导航节点；按一个稳定维度归组子节点，不承载具体知识结论", isGranularSensitive: false },
   { type: "problem", label: "问题/现象", singular: "一个问题或现象", forbidden: ["解决方法", "算法", "子问题", "多个并列问题"], note: "只描述问题/现象本身（定义、原因、影响）；解决方法必须是独立的 method/algorithm 节点，通过 MITIGATES 等关系关联；子问题必须拆分为独立 problem 子节点", isGranularSensitive: true },
   { type: "concept", label: "概念", singular: "一个概念", forbidden: ["多个并列概念", "方法", "算法"], note: "只定义一个概念及其边界；多个并列概念必须拆分为独立 concept 子节点，共享共性父节点", isGranularSensitive: true },
   { type: "method", label: "方法", singular: "一个方法或解决方案", forbidden: ["多个并列方法", "问题描述", "概念定义"], note: "只描述一个方法的流程和实现；多个方法必须拆分为独立 method 子节点", isGranularSensitive: true },

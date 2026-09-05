@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
-import type { KnowledgeDataset } from "../../core/knowledge/schema";
+import type { KnowledgeDataset, NodeType } from "../../core/knowledge/schema";
+import { isLeafType } from "../../core/knowledge/schema";
 import type { LlmMessage, LlmProvider } from "../../core/llm/contracts";
 import { CARD_SECTION_CATALOG } from "../../core/knowledge/card-section-catalog";
 import { executeKnowledgeTool, type KnowledgeToolObservation } from "./knowledge-tools";
@@ -22,7 +23,7 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
  * FMCW 默认 ReAct 提示词（未提供 Profile 时使用）
  * 包含节点粒度硬约束 6 条规则
  */
-const DEFAULT_REACT_PROMPT = `你是采用 ReAct 的知识检索 Agent。Observe 当前节点及前轮发现；判断缺口；Act 深入一个尚未解决的问题，输出一批实质知识；再观察覆盖度。优先比较同层解决方案，再深入子问题和依赖。定义、原理、假设、正反例、工程取舍、验证、实现、应用与研究均需考察。每批累积后统一合并，不要逐条调用图内查重工具。新增节点可引用本批或此前批次新节点ID作为父级。当前topic不存在于正式图谱时，cardBlocks 使用topic.id。说明无法证实的主张。只有连续多轮没有实质新增时才标记收敛。
+const REACT_BASE = `你是采用 ReAct 的知识检索 Agent。Observe 当前节点及前轮发现；判断缺口；Act 深入一个尚未解决的问题，输出一批实质知识；再观察覆盖度。优先比较同层解决方案，再深入子问题和依赖。定义、原理、假设、正反例、工程取舍、验证、实现、应用与研究均需考察。每批累积后统一合并，不要逐条调用图内查重工具。新增节点可引用本批或此前批次新节点ID作为父级。当前topic不存在于正式图谱时，cardBlocks 使用topic.id。说明无法证实的主张。只有连续多轮没有实质新增时才标记收敛。
 
 【节点粒度硬约束（必须遵守，由节点类型决定）】
 1. 一个节点只放一个东西，由 nodeType 硬编码决定：concept=一个概念，method/algorithm=一个解决方案，model=一个模型，problem=一个问题或现象，parameter=一个参数，metric=一个指标，application=一个应用场景，component=一个组件，artifact=一个制品。
@@ -32,11 +33,100 @@ const DEFAULT_REACT_PROMPT = `你是采用 ReAct 的知识检索 Agent。Observe
 5. 节点名称（canonicalName）简短具体，不超过15字，禁止"XX研究"、"XX概述"等空泛命名，禁止名称中包含"、""/""和"等并列连词。
 6. 节点摘要（shortFact）是一句话定义，不超过50字；详细原理、推导、比较、工程取舍放知识卡栏目。`;
 
-export function researchBudget(nodeCount: number, root: boolean) {
+type HierarchyPolicy = { enabled: boolean; intermediateNodeTypes: string[]; planningThreshold: number; maxDepth: number; maxPrimaryChildren: number };
+function hierarchyPolicy(profile?: TaskProfile): HierarchyPolicy {
+  const configured = profile?.hierarchy;
+  return { enabled: configured?.enabled ?? true, intermediateNodeTypes: configured?.intermediateNodeTypes ?? ["category"], planningThreshold: configured?.planningThreshold ?? 6, maxDepth: configured?.maxDepth ?? 6, maxPrimaryChildren: profile?.validation.maxPrimaryChildren ?? 8 };
+}
+function hierarchyRules(policy: HierarchyPolicy) {
+  if (!policy.enabled) return "【导航策略】本任务不强制知识类别；按 Profile 定义的导航节点组织，不能把分类树误当作数据流或调用图。";
+  return `【层级构造规则（先总后分）】\nH1. 先生成导航骨架，再生成具体叶子；中间节点可使用：${policy.intermediateNodeTypes.join("、")}。\nH2. 直接子节点达到 ${policy.planningThreshold} 个时开始规划归组；超过 ${policy.maxPrimaryChildren} 个时必须先重组。\nH3. 同一父节点的归类维度必须稳定且可命名；高相关节点先判断包含、组成、前置或输入输出，再考虑同级。\nH4. 主树建议不超过 ${policy.maxDepth} 层；允许通过 categoryPlan.reparentHints 移动已有叶子。`;
+}
+
+/** 仅对叶子节点生效的粒度规则（骨架阶段不适用）。 */
+const LEAF_GRANULARITY_RULES = `【叶子粒度规则（仅叶子节点适用）】
+L1. 叶子节点必须只承载一个具体知识结论（一个概念/方法/算法/模型/问题/参数/指标/应用/组件/制品）。
+L2. 多个并列解决思路必须拆为多个 method/algorithm 叶子，各挂到同一 category 下。
+L3. 叶子摘要 shortFact 是一句话定义（≤50字），细节放卡片。`;
+
+/** 骨架阶段：只建 category 中间层，不生具体叶子。 */
+const DEFAULT_REACT_PROMPT = REACT_BASE + "\n" + LEAF_GRANULARITY_RULES;
+
+export function researchBudget(nodeCount: number, root: boolean, profile?: TaskProfile) {
   const sparse = nodeCount < 20;
-  return { minRounds: sparse ? 6 : 4, initialRounds: sparse ? 10 : 6, maxNodeRounds: sparse ? 24 : 18,
-    maxCalls: root ? 360 : sparse ? 100 : 48, maxNodes: root ? 80 : 12,
-    minDurationMs: root ? 25 * 60_000 : 0, maxDurationMs: root ? 35 * 60_000 : 12 * 60_000 };
+  const targetMax = profile?.initialization?.full?.nodeCount?.[1] ?? 80;
+  return {
+    minRounds: sparse ? 6 : 4, initialRounds: sparse ? 10 : 6, maxNodeRounds: sparse ? 24 : 18,
+    maxCalls: root ? 360 : sparse ? 100 : 48, maxNodes: root ? targetMax : 12,
+    minDurationMs: root ? 25 * 60_000 : 0, maxDurationMs: root ? 35 * 60_000 : 12 * 60_000,
+    skeletonRounds: sparse ? 2 : 1, minLeavesPerCategory: 2, maxRecursionDepth: 6, maxPrimaryChildren: 8,
+  };
+}
+
+/** 合并 dataset 与已产出批次，得到包含本轮新节点的虚拟节点列表（用于层级统计）。 */
+function buildVirtualNodes(dataset: KnowledgeDataset, checkpoint: ResearchCheckpoint): Array<{ id: string; nodeType: NodeType; primaryParentId: string | null }> {
+  const fromDataset = dataset.nodes.map((n) => ({ id: n.id, nodeType: n.nodeType, primaryParentId: n.primaryParentId }));
+  const fromBatches = checkpoint.batches.flatMap((b) =>
+    b.proposal.newNodes.map((n) => ({ id: n.id || n.canonicalName, nodeType: ((n.nodeType ?? "concept") as NodeType), primaryParentId: n.parentId ?? null })),
+  );
+  return [...fromDataset, ...fromBatches];
+}
+
+/** 当父节点直接叶子过多时，给 LLM 反馈剩余名额，促使其先建 category。 */
+function siblingLoad(dataset: KnowledgeDataset, checkpoint: ResearchCheckpoint): Array<{ parentId: string; parentName: string; childCount: number; slotsLeft: number; recentChildren: string[] }> {
+  const vn = buildVirtualNodes(dataset, checkpoint);
+  const byParent = new Map<string, Array<{ id: string; nodeType: NodeType; primaryParentId: string | null }>>();
+  for (const n of vn) {
+    if (n.primaryParentId) {
+      const arr = byParent.get(n.primaryParentId) ?? [];
+      arr.push(n);
+      byParent.set(n.primaryParentId, arr);
+    }
+  }
+  const out: Array<{ parentId: string; parentName: string; childCount: number; slotsLeft: number; recentChildren: string[] }> = [];
+  for (const [pid, children] of byParent) {
+    const leafChildren = children.filter((c) => isLeafType(c.nodeType));
+    if (leafChildren.length >= 4) {
+      const parent = dataset.nodes.find((n) => n.id === pid);
+      out.push({
+        parentId: pid,
+        parentName: parent?.canonicalName ?? pid,
+        childCount: leafChildren.length,
+        slotsLeft: Math.max(0, 8 - leafChildren.length),
+        recentChildren: leafChildren.slice(-6).map((c) => c.id),
+      });
+    }
+  }
+  return out;
+}
+
+/** 按 Phase 过滤提案节点：skeleton 仅保留 category；leaf 仅保留挂到已有 category（或 topic）的叶子。 */
+function filterByPhase(
+  document: ResearchDocument,
+  phase: "skeleton" | "leaf",
+  dataset: KnowledgeDataset,
+  checkpoint: ResearchCheckpoint,
+  topicId: string,
+  policy: HierarchyPolicy,
+): ResearchDocument["proposal"]["newNodes"] {
+  const nodes = document.proposal.newNodes;
+  if (!policy.enabled) return nodes;
+  if (phase === "skeleton") {
+    return nodes.filter((n) => policy.intermediateNodeTypes.includes(n.nodeType ?? "concept"));
+  }
+  const categoryIds = new Set<string>([
+    ...dataset.nodes.filter((n) => policy.intermediateNodeTypes.includes(n.nodeType)).map((n) => n.id),
+    ...checkpoint.batches.flatMap((b) => b.proposal.newNodes.filter((n) => policy.intermediateNodeTypes.includes(n.nodeType ?? "concept")).map((n) => n.id || n.canonicalName)),
+  ]);
+  return nodes.filter((n) => {
+    if (!isLeafType((n.nodeType ?? "concept") as NodeType) || !n.parentId) return false;
+    if (categoryIds.has(n.parentId) || n.parentId === topicId) return true;
+    // During an MVP, a domain may be awaiting its first category. Keep a leaf
+    // candidate rather than dropping its card; validation will request a later
+    // regrouping only if the parent becomes too broad.
+    const parent = dataset.nodes.find((item) => item.id === n.parentId);
+    return Boolean(parent && !dataset.nodes.some((item) => item.primaryParentId === parent.id && policy.intermediateNodeTypes.includes(item.nodeType)));
+  });
 }
 
 export interface ResearchCheckpoint {
@@ -63,8 +153,9 @@ export async function collectAdaptiveResearch(input: {
   // 从 Profile 读取配置，未提供时使用 FMCW 默认
   const sectionMetadata = input.profile?.cardSections ?? CARD_SECTION_CATALOG;
   const reactPrompt = (input.profile?.prompts?.react ?? DEFAULT_REACT_PROMPT) + "\n" + (input.profile?.prompts.topicAppendix ?? "");
+  const hierarchy = hierarchyPolicy(input.profile);
   const budget = {
-    ...researchBudget(dataset.nodes.length, input.root),
+    ...researchBudget(dataset.nodes.length, input.root, input.profile),
     ...(input.profile?.initialization && input.root
       ? {
           minDurationMs: (input.profile.initialization as any).full?.rootBudgetMinutes?.[0]
@@ -100,7 +191,8 @@ export async function collectAdaptiveResearch(input: {
   };
   const outOfBudget = () => checkpoint.calls >= budget.maxCalls || Date.now() - started >= budget.maxDurationMs;
   let modelFailures = 0;
-  while (queue.length && checkpoint.visited.length < budget.maxNodes && !outOfBudget()) {
+  let leafBudgetUsed = 0;
+  while (queue.length && leafBudgetUsed < budget.maxNodes && checkpoint.visited.length < budget.maxNodes && !outOfBudget()) {
     input.signal?.throwIfAborted();
     const topic = queue.shift()!;
     checkpoint.visited.push(topic.id);
@@ -114,6 +206,7 @@ export async function collectAdaptiveResearch(input: {
     }) : [{ topic, status: "候选节点，尚未写入图谱" }];
     for (let round = 0; round < limit && !outOfBudget(); round++) {
       stats.rounds++;
+      const phase: "skeleton" | "leaf" = hierarchy.enabled && round < budget.skeletonRounds ? "skeleton" : "leaf";
       input.signal?.throwIfAborted();
       report("正在研究“" + topic.name + "” · 第 " + (round + 1) + "/" + limit + " 轮 · 已积累 " + checkpoint.batches.reduce((n, b) => n + b.proposal.newNodes.length, 0) + " 个候选节点");
       let external = "";
@@ -137,25 +230,31 @@ export async function collectAdaptiveResearch(input: {
         task: input.query.slice(0, 24000), topic, round: round + 1, context,
         graphIndex: dataset.nodes.map((n) => ({ id: n.id, name: n.canonicalName, parentId: n.primaryParentId })).slice(0, 500),
         pendingNodeIndex: checkpoint.batches.flatMap((b) => b.proposal.newNodes.map((n) => ({ id:n.id || n.canonicalName, name:n.canonicalName, parentId:n.parentId }))).slice(-400),
-        previousFindings: localBatches.slice(-6).map((b) => ({ assessment: b.coverageAssessment, gaps: b.gaps, names: b.proposal.newNodes.map((n) => n.canonicalName), blocks: b.proposal.cardBlocks.map((c) => c.title) })),
+        siblingLoad: siblingLoad(dataset, checkpoint),
+        previousFindings: localBatches.map((b) => ({ assessment: b.coverageAssessment, gaps: b.gaps, names: b.proposal.newNodes.map((n) => n.canonicalName), blocks: b.proposal.cardBlocks.map((c) => c.title) })),
         sources: external,
         sectionMetadata,
       }, 100000) }];
       try {
         const { document } = await requestResearch(provider,
-          reactPrompt, messages,
+          phase === "skeleton"
+            ? REACT_BASE + "\n" + hierarchyRules(hierarchy) + "\n【当前阶段：骨架】只创建中间导航节点，可给出 categoryPlan 及叶子重挂载提示；不要创建具体叶子。"
+            : reactPrompt + "\n" + hierarchyRules(hierarchy) + "\n" + LEAF_GRANULARITY_RULES, messages,
           { onDiagnostic: report, signal: deadline, onCall: () => {
             if (outOfBudget()) throw new Error("已达到研究预算");
             checkpoint.calls++;
           } });
         localBatches.push(document); checkpoint.batches.push(document); modelFailures = 0;
+        document.proposal.newNodes = filterByPhase(document, phase, dataset, checkpoint, topic.id, hierarchy);
+        if (phase === "skeleton") { document.proposal.cardBlocks = []; document.proposal.relations = []; }
+        leafBudgetUsed += document.proposal.newNodes.reduce((acc, n) => acc + (isLeafType((n.nodeType ?? "concept") as NodeType) ? 1 : 0.5), 0);
         let discoveries = document.proposal.newNodes.length + document.proposal.cardBlocks.length;
         // Distributed sub-calls: when gaps or new nodes exceed threshold, split into
         // multiple lightweight calls each focusing on a subset of gaps, reducing per-call load.
         const needDistribute = input.allowDistributed !== false && (document.gaps.length > 3 || document.proposal.newNodes.length > 8) && !outOfBudget();
         if (needDistribute) {
           report("检测到较多未解决缺口，拆分为分布式子调用降低单次负荷…");
-          const gapGroups = chunkArray(document.gaps.length ? document.gaps : document.proposal.newNodes.map(n => `完善 ${n.canonicalName} 的适用栏目与证据`), 2).slice(0, 2);
+          const gapGroups = chunkArray(document.gaps, 2).slice(0, 4);
           for (const group of gapGroups) {
             if (outOfBudget()) break;
             const subMessages: LlmMessage[] = [{ role: "user", content: boundedContext({
@@ -174,6 +273,9 @@ export async function collectAdaptiveResearch(input: {
                   if (outOfBudget()) throw new Error("已达到研究预算");
                   checkpoint.calls++;
                 } });
+              subDoc.proposal.newNodes = filterByPhase(subDoc, phase, dataset, checkpoint, topic.id, hierarchy);
+              if (phase === "skeleton") { subDoc.proposal.cardBlocks = []; subDoc.proposal.relations = []; }
+              leafBudgetUsed += subDoc.proposal.newNodes.reduce((acc, n) => acc + (isLeafType((n.nodeType ?? "concept") as NodeType) ? 1 : 0.5), 0);
               localBatches.push(subDoc); checkpoint.batches.push(subDoc);
               discoveries += subDoc.proposal.newNodes.length + subDoc.proposal.cardBlocks.length;
               report("分布式子调用完成，新增 " + subDoc.proposal.newNodes.length + " 节点 / " + subDoc.proposal.cardBlocks.length + " 卡片");
@@ -183,11 +285,10 @@ export async function collectAdaptiveResearch(input: {
           }
           save();
         }
-        quietRounds = document.converged && discoveries <= 1 ? quietRounds + 1 : 0;
+        quietRounds = document.converged && discoveries === 0 ? quietRounds + 1 : 0;
         if (discoveries >= 5) limit = Math.min(budget.maxNodeRounds, limit + 2);
         save();
-        if (round + 1 >= budget.minRounds && quietRounds >= 2) break;
-        if (input.root && topic.id === target.id && round + 1 >= budget.minRounds && Date.now() - started > budget.maxDurationMs * 0.28) break;
+        if (round + 1 >= budget.minRounds && quietRounds >= 3) break;
       } catch (error) {
         if (input.signal?.aborted) { checkpoint.stopReason="用户停止任务"; save(); input.signal.throwIfAborted(); }
         modelFailures++;
@@ -198,7 +299,7 @@ export async function collectAdaptiveResearch(input: {
     }
     if (modelFailures >= 3) break;
     // Batch boundary: reconcile traversal names once, then expand peer/child topics.
-    const nextTopics: Topic[] = dataset.nodes.filter((n) => n.primaryParentId === topic.id).map(topicOf);
+    const nextTopics: Topic[] = dataset.nodes.filter((n) => n.primaryParentId === topic.id).map((n) => ({ id: n.id, name: n.canonicalName, parentId: n.primaryParentId, fact: n.shortFact, depth: topic.depth + 1 }));
     for (const batch of localBatches) for (const node of batch.proposal.newNodes) {
       nextTopics.push({ id: node.id || node.canonicalName, name: node.canonicalName, parentId: node.parentId || topic.id, fact: node.shortFact, depth: topic.depth + 1 });
     }

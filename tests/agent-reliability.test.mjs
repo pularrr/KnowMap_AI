@@ -117,6 +117,36 @@ test("Build materializes more than two nodes, resolves new parents, preserves ca
   for (const title of ["测试同层方法甲","测试同层方法乙"]) assert.equal(positions.find((n)=>n.title===title).x,parentPosition.x);
 });
 
+test("layout splits broad sibling sets into non-overlapping lanes of at most eight", () => {
+  const parent = {id:"parent",title:"父节点",description:"",branch:"foundation"};
+  const children = Array.from({length:30},(_,index)=>({id:`child-${index}`,title:`子节点${index}`,description:"",branch:"foundation",parent:"parent"}));
+  const index = layout.createLayoutIndex([parent,...children]);
+  const positioned = layout.arrange(parent,index);
+  const childPositions = positioned.filter((node)=>node.parent==="parent");
+  const lanes = Map.groupBy(childPositions,(node)=>node.x);
+  assert.equal(lanes.size,4);
+  for (const lane of lanes.values()) {
+    assert.ok(lane.length<=layout.MAX_NODES_PER_LANE);
+    const ys = lane.map((node)=>node.y).sort((a,b)=>a-b);
+    for (let i=1;i<ys.length;i+=1) assert.ok(ys[i]-ys[i-1]>=layout.NODE_H);
+  }
+});
+
+test("category plans create a navigable category and transactionally reparent existing leaves", () => {
+  const leaf = dataset.nodes.find((node) => node.primaryParentId === "estimators");
+  const document = output.normalizeResearch({ answer:"重组", categoryPlan:[{
+    parentId:"estimators", categories:["经典估计方法"], reparentHints:[{ leafName:leaf.canonicalName, toCategory:"经典估计方法" }],
+  }], proposal:{ summary:"重组估计方法", newNodes:[], cardBlocks:[], relations:[], evidence:[] } });
+  const prepared = build.operationsFromResearch(document, dataset, "estimators");
+  const projected = agentGraphToDataset(applyOperations({...datasetToAgentGraph(dataset),revision:dataset.revision},prepared.operations,dataset.revision+1));
+  const category = projected.nodes.find((node) => node.canonicalName === "经典估计方法");
+  const moved = projected.nodes.find((node) => node.id === leaf.id);
+  assert.equal(category.nodeType,"category");
+  assert.equal(category.primaryParentId,"estimators");
+  assert.equal(moved.primaryParentId,category.id);
+  assert.ok(projected.cards.some((card) => card.nodeId === category.id));
+});
+
 test("adaptive ReAct resets minimum observations for every visited topic and uses larger sparse-graph budgets", async () => {
   const events = [];
   const provider = {name:"mock",async createResponse(request) {

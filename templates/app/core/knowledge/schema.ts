@@ -15,6 +15,7 @@ export type SemanticDomainId =
 
 export type NodeType =
   | "domain"
+  | "category"
   | "problem"
   | "concept"
   | "method"
@@ -42,6 +43,7 @@ export type NodeType =
  */
 export const NODE_TYPE_SEMANTICS: Record<NodeType, { singular: string; forbidden: string[]; note: string }> = {
   domain: { singular: "一个知识域", forbidden: [], note: "分类节点，用于组织子节点，不承载具体知识内容" },
+  category: { singular: "一个可命名的知识类别", forbidden: ["具体知识细节", "多个分类维度"], note: "中间导航节点，用于把同一父节点下的知识按一个稳定维度归组；不代替具体概念、方法或组件" },
   problem: { singular: "一个问题或现象", forbidden: ["解决方法", "算法", "子问题", "多个并列问题"], note: "只描述问题/现象本身（定义、原因、影响）；解决方法必须是独立的 method/algorithm 节点，通过 MITIGATES 等关系关联；子问题必须拆分为独立 problem 子节点" },
   concept: { singular: "一个概念", forbidden: ["多个并列概念", "方法", "算法"], note: "只定义一个概念及其边界；多个并列概念必须拆分为独立 concept 子节点，共享共性父节点" },
   method: { singular: "一个方法或解决方案", forbidden: ["多个并列方法", "问题描述", "概念定义"], note: "只描述一个方法的流程和实现；多个方法必须拆分为独立 method 子节点" },
@@ -53,6 +55,11 @@ export const NODE_TYPE_SEMANTICS: Record<NodeType, { singular: string; forbidden
   metric: { singular: "一个指标", forbidden: ["多个并列指标"], note: "只描述一个指标的定义、计算方式和意义" },
   application: { singular: "一个应用场景", forbidden: ["多个并列场景"], note: "只描述一个应用场景的需求、约束和方案" },
 };
+
+/** 非叶子（分类/导航）节点类型：domain 与 category 不承载具体知识，需进一步细分。 */
+export const NON_LEAF_TYPES = new Set<NodeType>(["domain", "category"]);
+export function isLeafType(nodeType: NodeType): boolean { return !NON_LEAF_TYPES.has(nodeType); }
+export function isLeafNode(node: { nodeType: NodeType }): boolean { return isLeafType(node.nodeType); }
 
 export type KnowledgeStatus = "draft" | "reviewed" | "published";
 

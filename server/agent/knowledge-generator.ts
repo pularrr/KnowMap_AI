@@ -8,6 +8,7 @@ import { datasetToAgentGraph } from "../../core/knowledge/portable-bundle";
 import { validateKnowledgeDataset } from "../../core/knowledge/validation";
 import { validateProfile } from "../profile/validate-profile";
 import { collectAdaptiveResearch, type ResearchStats } from "./adaptive-research";
+import { issueMvpToken } from "./mvp-confirmation";
 import { operationsFromResearch } from "./research-build";
 import { networkToDataset, datasetToNetwork, type KnowledgeNetwork } from "./network-dataset";
 export type { KnowledgeNetwork } from "./network-dataset";
@@ -16,7 +17,7 @@ export interface GenerationResult {
   network: KnowledgeNetwork; mode: GenerationMode; iterations: number;
   totalNodes: number; totalCardBlocks: number; totalRelations: number;
   distributedCalls: number; warnings: string[]; converged: boolean;
-  stats: ResearchStats;
+  stats: ResearchStats; mvpAcceptanceToken?: string;
 }
 
 export class KnowledgeGenerator {
@@ -62,13 +63,14 @@ export class KnowledgeGenerator {
     const merged = { ...graph, domains: dataset.domains, formulas: graph.formulas ?? [] } as KnowledgeDataset;
     if (mvp) for (const card of merged.cards) card.blocks = card.blocks.filter(b => b.type === "definition");
     const network = datasetToNetwork(merged);
+    const mvpAcceptanceToken = mvp ? issueMvpToken(this.profile.id, network) : undefined;
     const validated = networkToDataset(network, this.profile);
     const validation = validateKnowledgeDataset(validated, { profile: this.profile });
     warnings.push(...validation.warnings.map(w => `${w.code}: ${w.message}`));
     if (doc.gaps.length) warnings.push(`剩余缺口: ${doc.gaps.join("；")}`);
     return { network, mode: this.mode, iterations: stats.rounds, totalNodes: network.nodes.length,
       totalCardBlocks: network.cardBlocks.length, totalRelations: network.relations.length,
-      distributedCalls: stats.distributedCalls, warnings, converged: doc.converged, stats };
+      distributedCalls: stats.distributedCalls, warnings, converged: doc.converged, stats, mvpAcceptanceToken };
   }
 
   writeNetworkToFile(network: KnowledgeNetwork, outputPath?: string): string {

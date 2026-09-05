@@ -78,6 +78,7 @@ export const LIDAR_TECH_ROUTE_PROFILE: TaskProfile = {
   // 11 种基础节点类型（复用）
   nodeTypes: [
     { type: "domain", label: "领域", singular: "一个知识领域", forbidden: ["多个领域混合"], note: "根节点和一级域节点", isGranularSensitive: false },
+    { type: "category", label: "知识类别", singular: "一个可命名的知识类别", forbidden: ["具体知识细节"], note: "中间导航节点，按稳定维度归组", isGranularSensitive: false },
     { type: "problem", label: "问题", singular: "一个问题或现象", forbidden: ["解决方法", "子问题", "多个问题并列"], note: "只描述问题/现象本身，解决方法必须是独立节点", isGranularSensitive: true },
     { type: "concept", label: "概念", singular: "一个概念", forbidden: ["多个并列概念", "方法", "算法"], note: "基础概念和定义", isGranularSensitive: true },
     { type: "method", label: "方法", singular: "一个解决方案", forbidden: ["多个方法并列", "问题", "概念"], note: "通用方法和技术路线", isGranularSensitive: true },
@@ -128,7 +129,9 @@ export const LIDAR_TECH_ROUTE_PROFILE: TaskProfile = {
     domainCount: 7,
     visualBranchCount: 5,
     rootNodeRequired: true,
+    maxPrimaryChildren: 8,
   },
+  hierarchy: { enabled: true, intermediateNodeTypes: ["category"], planningThreshold: 6, maxDepth: 6 },
 
   // 提示词
   prompts: {

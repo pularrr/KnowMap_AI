@@ -32,6 +32,8 @@ test("non-FMCW generation preserves hierarchy, cards, evidence and the MVP bound
     const { networkToDataset } = await load("/server/agent/network-dataset.ts");
     const { RuntimeKnowledgeRepository } = await load("/server/runtime/runtime-repository.ts");
     validateProfile(profile);
+    assert.doesNotThrow(() => validateProfile({ ...profile, hierarchy:{ enabled:false, intermediateNodeTypes:[] } }));
+    assert.throws(() => validateProfile({ ...profile, hierarchy:{ enabled:true, intermediateNodeTypes:["module"] } }), /hierarchy/);
     assert.throws(() => validateProfile({ ...profile, domains: [] }));
     let calls = 0, searches = 0;
     const response = text => ({ id: "mock", provider: "test", model: "test", status: "completed", text, toolCalls: [], session: {} });

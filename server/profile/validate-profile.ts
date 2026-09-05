@@ -13,7 +13,8 @@ const profileSchema = z.object({
   nodeTypes: z.array(z.object({ type: text, label: text, singular: text, forbidden: z.array(z.string()), note: z.string(), isGranularSensitive: z.boolean() })).min(1),
   edgeTypes: z.array(z.object({ type: text, label: text, direction: z.enum(["directed", "symmetric"]), description: text })).min(1),
   cardSections: z.array(z.object({ type: text, label: text, definition: text, coverage: z.enum(["core","conditional","optional"]), appliesTo: z.union([z.literal("all"),z.array(text)]), order: z.number() })).min(1),
-  validation: z.object({ domainCount: z.number().int().positive(), visualBranchCount: z.number().int().positive(), rootNodeRequired: z.boolean(), extraRules: z.array(text).optional() }),
+  validation: z.object({ domainCount: z.number().int().positive(), visualBranchCount: z.number().int().positive(), rootNodeRequired: z.boolean(), maxPrimaryChildren: z.number().int().min(1).optional(), extraRules: z.array(text).optional() }),
+  hierarchy: z.object({ enabled: z.boolean(), intermediateNodeTypes: z.array(text), planningThreshold: z.number().int().min(1).optional(), maxDepth: z.number().int().min(1).optional(), minMembersPerIntermediate: z.number().int().min(1).optional() }).optional(),
   prompts: z.object({ react: text, review: text, finalResponse: text, ingest: z.record(z.string()), topicAppendix: z.string().optional() }),
   initialization: z.object({ rootNode: z.object({ id: text, name: text, shortFact: text }),
     mvp: z.object({ nodeCount: pair, reactRounds: pair, sectionsFilled: z.array(text), domainCount: pair, durationMinutes: pair }),
@@ -42,5 +43,6 @@ export function validateProfile(value: unknown): TaskProfile {
   supported(p.edgeTypes.map(t => t.type), BASE_EDGE_TYPES.map(t => t.type), "边类型");
   supported(p.cardSections.map(t => t.type), CARD_SECTION_CATALOG.map(t => t.type), "栏目");
   if (!p.nodeTypes.some(t => t.type === "domain") || !p.cardSections.some(t => t.type === "definition")) throw new Error("需要 domain 类型和 definition 栏目");
+  if (p.hierarchy?.enabled && p.hierarchy.intermediateNodeTypes.some(type => !p.nodeTypes.some(nodeType => nodeType.type === type))) throw new Error("hierarchy 引用了未声明的中间节点类型");
   return p;
 }

@@ -121,6 +121,7 @@ export const FMCW_PROFILE: TaskProfile = {
   // 11 种节点类型，每种硬编码规定"只放一个什么"和"禁止什么"
   nodeTypes: [
     { type: "domain", label: "知识域", singular: "一个知识域", forbidden: [], note: "分类节点，用于组织子节点，不承载具体知识内容", isGranularSensitive: false },
+    { type: "category", label: "知识类别", singular: "一个可命名的知识类别", forbidden: ["具体知识细节", "多个分类维度"], note: "中间导航节点；按稳定维度归组子节点", isGranularSensitive: false },
     { type: "problem", label: "问题/现象", singular: "一个问题或现象", forbidden: ["解决方法", "算法", "子问题", "多个并列问题"], note: "只描述问题/现象本身（定义、原因、影响）；解决方法必须是独立的 method/algorithm 节点，通过 MITIGATES 等关系关联；子问题必须拆分为独立 problem 子节点", isGranularSensitive: true },
     { type: "concept", label: "概念", singular: "一个概念", forbidden: ["多个并列概念", "方法", "算法"], note: "只定义一个概念及其边界；多个并列概念必须拆分为独立 concept 子节点，共享共性父节点", isGranularSensitive: true },
     { type: "method", label: "方法", singular: "一个方法或解决方案", forbidden: ["多个并列方法", "问题描述", "概念定义"], note: "只描述一个方法的流程和实现；多个方法必须拆分为独立 method 子节点", isGranularSensitive: true },
@@ -175,7 +176,9 @@ export const FMCW_PROFILE: TaskProfile = {
     domainCount: 11,
     visualBranchCount: 5,
     rootNodeRequired: true,
+    maxPrimaryChildren: 8,
   },
+  hierarchy: { enabled: true, intermediateNodeTypes: ["category"], planningThreshold: 6, maxDepth: 6 },
 
   // ============================================================
   // Step 5：提示词抽取（已完成）

@@ -1,30 +1,66 @@
 ---
-name: knowmap
-description: 从自然语言主题创建可运行的 AI 知识网络应用。用于设计 TaskProfile、生成和确认 MVP、继续完整研究、校验网络、创建应用并注入数据；也用于用户明确要求调用 KnowMap 或知识图谱生成插件时。
+name: knowmap-plugin
+description: 从主题创建可交互的知识图谱 AI 应用：由宿主 LLM 设计 Profile、生成 MVP 并确认、编写完整网络、校验后复制应用模板并注入数据。用于新建主题知识网络；已有图谱内的提问和资料接入使用应用运行时。
+metadata:
+  compatibility: 需要本地文件和命令工具、Node.js >=22.13.0；构建由当前宿主 LLM 完成。
 ---
 
-# KnowMap Codex 入口
+# KnowMap：构建应用的插件
 
-在当前工作区向上定位同时包含 `plugin/discovery.mjs`、`plugin/SKILL.md` 和 `scripts/knowmap.mjs` 的 KnowMap 项目根目录。找不到时说明当前工作区没有完整 KnowMap 源码，不要猜测路径。
+工作目录为包含 package.json、scripts/、templates/app/ 的完整项目根目录。宿主 LLM 执行本文件；应用内部 Agent 执行另一套运行时工作流。不要要求模型重写已有 UI 或研究引擎。
 
-先读取项目根的 `plugin/SKILL.md`，它是完整工作流和验收标准。执行 `node scripts/knowmap.mjs discover` 验证机器契约。自然语言意图映射如下：
+## 入口与发现
 
-- “设计主题/领域结构” → 宿主直接编写 Profile JSON，再调用 `validate-profile`
-- “检查 Profile” → `validate-profile`
-- “先给我看最小版本/MVP” → 宿主直接编写 MVP JSON，再调用 `validate`
-- “我已确认，继续完整开发” → 宿主接续已确认 MVP 直接编写完整网络，再调用 `validate`
-- “检查网络” → `validate`
-- “把结果装入生成应用” → `inject`
+先执行 `node scripts/knowmap.mjs discover` 获取机器可读能力描述。宿主可以导入 `discoverKnowmap()`（plugin/discovery.mjs），注册其 name、description、inputSchema，并把工具执行映射到 `runKnowmap({ action, input, output })`（scripts/knowmap.mjs）。宿主需要自行适配工具协议、解析绝对文件路径并执行本地命令。此函数不会自动安装插件或使未接入工具的聊天模型获得执行能力。
 
-开始时必须在 KnowMap 项目根目录之外创建全新的隔离任务目录。Profile、MVP、完整网络、审查文件和生成应用全部放入该目录，禁止写入 KnowMap 项目的 work、outputs、data 或其他子目录。除非用户已经明确确认 MVP，否则在 MVP 展示后停下等待确认。
+第一次运行先 `npm install`。在 KnowMap 项目根目录之外创建一个全新的任务目录，所有 Profile、MVP、完整网络、校验报告和最终应用都写入该目录；不得在项目的 work、outputs、data、plugin 或其他子目录生成任务产物。命令写新文件，输出已存在时失败，避免覆盖检查点。
 
-构建内容由当前 Codex 宿主直接生成，禁止调用 `knowmap.mjs design/mvp/full`、项目 API、项目 KnowledgeGenerator 或读取/测试项目已配置的 DeepSeek/其他 Provider。13栏目是候选词表，宿主必须按任务重新选择子集；definition 必选，其他栏目只在适用时使用。API Key 仅由用户在生成应用交付后自行配置。
+构建阶段只使用当前宿主 LLM 的能力直接编写结构化 JSON，严禁调用本项目已配置的 DeepSeek 或其他付费 Provider，也不得读取或测试其 Key、baseUrl、model。`knowmap.mjs` 已对 design/mvp/full 设置硬拒绝。API Key 仅在独立应用构建、测试和交付完成后，由用户自行在新应用设置页接入。
 
-示例：
+## 两层工作流
 
-```text
-用户：为“激光雷达感知技术”生成一个知识网络应用。
-Codex：定位项目 → 在项目外新建隔离目录 → 读取完整 Skill → 直接编写 Profile → validate-profile → 直接编写 MVP → validate → 展示并等待确认。
-```
+| 层 | 执行者与产物 | 入口 |
+| --- | --- | --- |
+| 插件构建层 | 宿主 LLM → Profile + network → 独立 Next.js 应用 | scripts/knowmap.mjs、scripts/create-app.mjs |
+| 应用运行层 | Node.js Agent → 回答、研究候选与确认后的图谱更新 | /api/agent/chat、/api/agent/jobs、/api/knowledge/ingest |
 
-插件提供任务选择和操作说明；本地命令、文件读写和模型调用仍由 Codex 的当前权限与项目配置控制。
+两层共用数据契约和 validateKnowledgeDataset；只有应用运行层使用 provider 与 collectAdaptiveResearch。构建层由宿主直接编写 Profile 和网络，不调用 ProfileDesigner，不读取项目 Key。发现入口与运行时 API 协议兼容性相互独立。
+
+## 七步构建流程
+
+确认主题和输出目录，有信息时直接使用，不重复追问。所有示例在项目根执行。详细请求 JSON 和失败处理见下列工作流。
+
+| 步骤 | 调用 / 输入 | 输出 | 验证 |
+| --- | --- | --- | --- |
+| 1 Profile | [设计工作流](workflows/profile-design-workflow.md)，宿主直接编写 JSON | 隔离任务目录/profile.json | validate-profile：字段、引用和当前引擎支持范围 |
+| 2 MVP | [MVP 工作流](workflows/mvp-generation-workflow.md)，宿主直接编写 | 隔离任务目录/mvp.json | validate；展示域树、节点和2–3张卡，请用户确认方向 |
+| 3 完整开发 | [完整工作流](workflows/full-development-workflow.md)，宿主接续确认过的 MVP | 隔离任务目录/full.json | validate；报告未解决缺口 |
+| 4 合并审查 | [审查工作流](workflows/validation-workflow.md)，validate + 宿主语义审查 | 隔离任务目录/reviewed.json、校验报告 | 修复结构错误；逐项审查 warning；重跑校验 |
+| 5 脚手架 | create-app.mjs --profile-file <隔离目录>/profile.json --name my-map --output <隔离目录>/app | 应用代码、激活的 Profile、空运行时目录 | 输出在项目外；Profile ID、真实 root ID、依赖完整 |
+| 6 注入 | knowmap.mjs inject --input <隔离目录>/reviewed.json --output <隔离目录>/app | data/runtime/knowledge-state.json | 使用 RuntimeKnowledgeRepository 生成封装和 checksum，并回读比较 |
+| 7 交付 | 产物目录 npm install、npm run type-check、npm test、npm run build、npm run dev | 可启动应用、验收记录 | 图谱、聊天、卡片、LaTeX、字号、资料入口；区分离线检查和真实提供商验收 |
+
+生成 MVP 或完整网络前必须读取 [先总后分的层级构造法](references/hierarchy-construction.md)。Profile 启用 hierarchy 时先生成导航中间层并完成宽度审查，再生成具体节点和卡片；CodeGraph 等任务使用 Profile 声明的仓库导航层级，禁止把“一个节点一个概念”解释为把所有细概念直接平铺在域下。
+
+MVP 未确认时停在展示阶段；用户已经确认则继续，不重复索要确认。调整域、根或主题范围后重新展示 MVP。confirmedMvp 是宿主传递的用户确认标记，不是自动生成的审批证据。
+
+## 质量与预算
+
+- 域数、节点数、类型数、栏目数是建议，不按固定数量凑内容。MVP 建议15–30节点，完整建议80–150节点；不设输出节点数硬上限。
+- 当前引擎支持基础12种节点类型（含中间导航用 category）、12种边类型、13种栏目；它们是可选分类词表，不是通用的13项填写清单。宿主必须根据任务重新选择 cardSections 子集、适用节点类型和覆盖级别，通常只要求 definition，其他栏目只在语义适合时使用。架构图、代码图等任务不得机械套用研究热点、公式假设或典型应用。新类型或新栏目不能只靠 JSON 获得 UI 和工具支持，需要先扩展引擎。配色使用 foundation/signal/data/system/ai，语义域 ID 可自定义。
+- MVP 在根主题上执行2–3轮，最多2次浅搜索，禁用拆分子调用；只保留 definition。完整模式逐主题重置轮次，按时间、调用、访问主题预算停止。“访问主题预算”不是输出节点上限。
+- 35分钟约束研究阶段；安装、构建、人工审查额外计时。不把预算耗尽称为收敛，不把模拟输出称为真实检索。
+- 多概念、名称>20字、摘要>80字、problem 混入方法、父节点直接子节点超过 Profile 上限（默认8）和平铺叶子概念由共享校验产生 warning。拆分应同步修复父级、卡片和边；不要机械截断名字、编号分组或凭字符串命中删除知识。
+- KnowledgeNetwork 是 nodes/cardBlocks/relations（可带 evidence）；KnowledgeDataset 是 nodes/cards/edges/domains/formulas；runtime 文件还有 state、schemaVersion、checksum。不可将裸 network 直接改名成 knowledge-state.json。
+
+## 应用运行时
+
+只在已有应用中研究节点时读[深搜工作流](workflows/deep-search-workflow.md)；导入资料时读[资料工作流](workflows/knowledge-ingest-workflow.md)。运行时研究结果经过应用现有审查/确认机制写入，不使用构建层 inject 覆盖已有状态。
+
+## 故障与恢复
+
+模型格式错误由共享 provider/research 输出模块有限重试、修复和截断恢复。结构转换失败时保留结果文件，修复 JSON 后重新 validate。研究批次存于 data/runtime/research；当前不承诺自动从这些批次恢复遍历队列。完整模式可以从一个已审查的网络重新发起研究，此操作是新一轮研究。
+
+生成产物包含本插件说明和命令，但不递归包含 templates/app。若要再次创建应用，调用原始完整插件项目中的脚手架。不要宣称单个生成应用能够无限自举。
+
+参考基准提交 b45dd0c。开发审查与验证记录见 ../docs/plugin-audit-plan.md 和 ../docs/plugin-audit-results.md。
