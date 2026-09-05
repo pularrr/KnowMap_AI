@@ -1,126 +1,18 @@
-# 工作流 3：完整开发工作流
+# Step 3：接续确认的 MVP 完整研究
 
-## 目标
-基于锁定的 Profile 设计，生成完整的知识网络。
+输入：work/mvp.json 与用户对该版本的明确确认。输出：work/full.json。读取 [完整开发提示词](../prompts/full-development-prompt.md)。
 
-## 触发条件
-- 用户确认 MVP 方向正确
-- Profile 核心设计已锁定
+用户确认后才创建下一阶段输入；下面的布尔值表达已有确认，不能用来代替询问用户：
+```sh
+node --input-type=module -e "import fs from 'node:fs'; const m=JSON.parse(fs.readFileSync('work/mvp.json','utf8')); fs.writeFileSync('work/full-request.json',JSON.stringify({topic:m.topic,profile:m.profile,network:m.network,confirmedMvp:true}),{flag:'wx'});"
+node scripts/knowmap.mjs full --input work/full-request.json --output work/full.json
+node scripts/knowmap.mjs validate --input work/full.json --output work/full-validation.json
+```
 
-## 输入
-- 主题
-- 锁定的 Profile
-- MVP 知识网络（作为起点）
-- LLM 配置
+full 使用 initialNetwork 接续 MVP，继承当前 Profile，不重新初始化知识树。完整模式复用同一研究引擎，每个访问主题重新计算轮次；候选批量转换、合并并解析临时 ID；保存证据和卡片文本。大批缺口拆成同进程子调用，不是多机任务分发。
 
-## 参数
-- 节点数：80-150 个
-- 自适应深度检索（逐节点 ReAct 计数重置、预算自适应）
-- 根节点预算：25-35 分钟
-- 完整知识卡（5+ 栏目）
-- 批量合并 + 分布式子调用
-- 时间：25-40 分钟
+预算：研究最大35分钟，另有调用数和访问主题数预算；80–150是知识节点建议目标，不是截断上限。不因为时间尚未用完强行重复知识。输出 stats.stopReason 和 converged；非收敛时把缺口交付给审查阶段。
 
-## 步骤
+不要用 POST /api/agent/generate 跑 full：该路由的部署预算为5分钟，目前会明确拒绝 full，请使用本地命令。应用层的后台任务用于已建应用的研究，和插件生成命令是两个入口。
 
-### Step 1：加载锁定的 Profile
-1. 从 profiles/<topic>.ts 加载 Profile
-2. 确认 Profile 核心设计已锁定（域划分、节点类型、栏目、根节点）
-3. 加载 MVP 知识网络作为起点
-
-### Step 2：按域生成一级域节点
-1. 遍历 Profile.domains
-2. 为每个域创建或确认 domain 类型节点
-3. 父节点为根节点
-
-### Step 3：自适应 ReAct 深度检索
-对每个域节点，执行自适应 ReAct：
-
-#### 3.1 逐节点 ReAct 计数重置
-- 每个新节点重新计算预算
-- 稀疏图谱更多轮次，较完整图谱较少轮次
-- 连续两轮收敛且新增很少时结束该节点
-
-#### 3.2 ReAct 循环（每节点 6-24 轮）
-每轮执行：
-1. **Observe**：
-   - 读取当前节点及子节点
-   - 评估知识卡栏目覆盖度
-   - 识别知识缺口
-   - compactObservation（outputLimit=600）
-   - rollingContext（keep=6）
-2. **Act**：
-   - 调用 LLM 生成一批新知识
-   - 优先比较同层解决方案，再深入子问题和依赖
-   - 定义、原理、假设、正反例、工程取舍、验证、实现、应用与研究均需考察
-3. **批量合并**：
-   - 收集所有候选后统一比对
-   - 不要逐条调用图内查重工具
-   - 新增节点可引用本批或此前批次新节点 ID 作为父级
-
-#### 3.3 分布式子调用
-触发条件：单轮 gaps>3 或 newNodes>8
-- 按每组 2 个 gap 拆分，最多 2 组
-- 每组输入上限 60000 字符
-- graphIndex 精简至 200 节点
-- 并行执行各组
-
-#### 3.4 收敛判断
-- 连续两轮新增很少（<2 节点）时收敛
-- 达到该节点预算上限时停止
-- 达到全局节点数目标（80-150）时停止
-
-### Step 4：语义审查 + 结构校验
-1. **节点粒度审查**：
-   - MULTI_CONCEPT_NODE：名称含并列连词
-   - NODE_NAME_TOO_LONG：名称 >20 字
-   - SHORTFACT_TOO_LONG：shortFact >80 字
-   - PROBLEM_NODE_HAS_SOLUTION：problem 节点含解决方法
-2. **结构性规则**：
-   - 根节点唯一
-   - 边端点存在
-   - 域数量校验
-   - 视觉分支数量校验
-3. **语义审查 fail-open**：
-   - 解析失败降级为 warning
-   - 不阻塞合并
-   - hardReview 仍严格把关
-
-### Step 5：Build 预览 → 用户确认 → 写入图谱
-1. 生成知识网络预览
-2. 展示给用户确认
-3. 用户确认后写入 data/runtime/knowledge-state.json
-
-### Step 6：生成完整的可运行应用
-1. 确认所有文件完整
-2. 运行 npm run type-check
-3. 运行 npm test
-4. 编写开发报告
-
-## 输出
-- 完整的知识网络（80-150 节点）
-- data/runtime/knowledge-state.json
-- 完整的可运行应用
-
-## 验证标准
-- [ ] 节点数在 80-150 范围内
-- [ ] 知识卡栏目完整（5+ 栏目）
-- [ ] 节点符合"一个节点一个概念"约束
-- [ ] problem 节点无解决方法混入
-- [ ] 关系合理（父子关系 + 跨节点语义关系）
-- [ ] 语义审查和结构校验通过
-- [ ] 应用可以独立运行
-- [ ] 应用支持问答、深度检索、资料整理
-- [ ] 生成时间在 25-40 分钟内
-- [ ] 每个域至少有 5 个节点
-
-## 常见问题
-| 问题 | 解决方案 |
-| --- | --- |
-| 节点数量不足 | 增加 ReAct 轮次上限（24→36），降低收敛阈值 |
-| 节点质量差 | 优化提示词，增加节点粒度约束，增加审查环节 |
-| 重复节点多 | 优化批量合并的去重逻辑，增加语义相似度去重 |
-| 栏目填充率低 | 在提示词中强调栏目填充，增加核心栏目要求 |
-| 生成时间过长 | 优化输入大小，增加早期停止条件，使用分布式子调用 |
-| LLM 输出无效 JSON | 增加 JSON 格式校验+修复，增加输出示例 |
-| 单次调用输入超限 | 触发分布式子调用，精简 graphIndex |
+失败：查看控制台诊断和 data/runtime/research/<run-id>.json。批次文件保留成果，但当前不能自动重建完整执行队列；先审查恢复的网络，再从已确认网络发起新一轮 full。不要手写“已自动恢复”的状态。

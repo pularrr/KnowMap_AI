@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { expandedKnowledgeDataset } from "../../data/knowledge/deep-slices";
+import { expandedKnowledgeDataset } from "../../data/knowledge/initial-dataset";
 import { RuntimeLlmConfigStore } from "../config/runtime-llm-config";
 import { ConfirmationTokenService } from "../security/confirmation-token";
 import { RuntimeKnowledgeRepository } from "./runtime-repository";

@@ -11,6 +11,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ProfileDesigner } from "../../../../server/profile/profile-designer";
 import { createConfiguredLlmProvider } from "../../../../server/llm/provider-factory";
+import { runtimeLlmConfigStore } from "../../../../server/runtime/app-runtime";
+import { validateProfile } from "../../../../server/profile/validate-profile";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // 5 分钟超时
@@ -28,9 +30,10 @@ export async function POST(request: NextRequest) {
     }
 
     // 使用统一的 LlmProvider（自动处理推理模型兼容、tool_choice 剥离等）
-    const provider = createConfiguredLlmProvider();
+    const provider = createConfiguredLlmProvider({ environment: runtimeLlmConfigStore().environment() });
     const designer = new ProfileDesigner(provider, topic, taskDescription);
     const result = await designer.design();
+    validateProfile(result.profile);
 
     let filePath: string | undefined;
     if (writeToFile) {

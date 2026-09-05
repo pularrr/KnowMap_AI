@@ -9,10 +9,12 @@
 
 import type { TaskProfile } from "../../plugin/contracts/task-profile";
 import { FMCW_PROFILE } from "../../profiles/fmcw-radar";
+import { ACTIVE_PROFILE } from "../../profiles/active";
 
 /** 内置 Profile 注册表 */
 const builtinProfiles: Map<string, TaskProfile> = new Map([
   [FMCW_PROFILE.id, FMCW_PROFILE],
+  [ACTIVE_PROFILE.id, ACTIVE_PROFILE],
 ]);
 
 /**
@@ -25,7 +27,7 @@ export class ProfileLoader {
   private cache: Map<string, TaskProfile> = new Map();
   private currentProfileId: string;
 
-  constructor(defaultProfileId: string = FMCW_PROFILE.id) {
+  constructor(defaultProfileId: string = ACTIVE_PROFILE.id) {
     this.currentProfileId = defaultProfileId;
     // 预加载内置 Profile
     for (const [id, profile] of builtinProfiles) {
@@ -154,7 +156,7 @@ export class ProfileLoader {
  *
  * 应用启动时使用此实例。P3-2 Step 7 会将其注入到应用各层（validation、agent、UI）。
  */
-export const defaultProfileLoader = new ProfileLoader(FMCW_PROFILE.id);
+export const defaultProfileLoader = new ProfileLoader(ACTIVE_PROFILE.id);
 
 /**
  * 便捷函数：获取 FMCW Profile

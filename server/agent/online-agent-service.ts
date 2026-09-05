@@ -1,4 +1,5 @@
 import { collectAdaptiveResearch } from "./adaptive-research";
+import { ACTIVE_PROFILE } from "../../profiles/active";
 import { prepareReferenceProposal } from "../knowledge/reference-baseline";
 import { operationsFromResearch } from "./research-build";
 import { parseObject, requestResearch } from "./research-output";
@@ -104,7 +105,7 @@ async function semanticReview(provider: LlmProvider, proposal: KnowledgeProposal
     let previous = "";
     for (let attempt = 0; attempt < 3; attempt++) {
       const response = await provider.createResponse({
-        instructions: '你是独立 Review Agent。对照已有知识卡和提案检查主张冲突、重复、栏目归类、主父级和关系方向。看不到来源时注明待核验，不捏造引文。只返回 JSON：{"accepted":true,"findings":[{"code":"...","severity":"error|warning","message":"具体问题","operationIndex":0}]}。输出语法不正确时修复格式。',
+        instructions: ACTIVE_PROFILE.prompts.review + '\n你是独立 Review Agent。对照已有知识卡和提案检查主张冲突、重复、栏目归类、主父级和关系方向。看不到来源时注明待核验，不捏造引文。只返回 JSON：{"accepted":true,"findings":[{"code":"...","severity":"error|warning","message":"具体问题","operationIndex":0}]}。输出语法不正确时修复格式。',
         messages: [{role:"user",content:JSON.stringify({context,operations:proposal.candidateOperations.slice(offset,offset+24),previousInvalidResponse:previous}).slice(0,100000)}],
         maxOutputTokens:4096,
         signal,
@@ -157,7 +158,7 @@ export class OnlineAgentService {
     await repository.putRun(run);
     const provider = createConfiguredLlmProvider({ environment: runtimeLlmConfigStore().environment() });
     const response = await provider.createResponse({
-      instructions: ANSWER_INSTRUCTIONS,
+      instructions: ANSWER_INSTRUCTIONS.replace("FMCW 雷达领域", ACTIVE_PROFILE.name) + "\n" + ACTIVE_PROFILE.prompts.finalResponse + "\n" + (ACTIVE_PROFILE.prompts.topicAppendix ?? ""),
       messages: [{ role: "user", content: answerPrompt(dataset, input.nodeId, input.query) }],
     });
     run = transitionAgentRun(run, "applied", { actor: "development-agent", summary: "在线回答完成", at: now() });
@@ -187,7 +188,7 @@ export class OnlineAgentService {
     const provider = createConfiguredLlmProvider({ environment: runtimeLlmConfigStore().environment() });
     const request = {
       signal: input.signal,
-      instructions: ANSWER_INSTRUCTIONS,
+      instructions: ANSWER_INSTRUCTIONS.replace("FMCW 雷达领域", ACTIVE_PROFILE.name) + "\n" + ACTIVE_PROFILE.prompts.finalResponse + "\n" + (ACTIVE_PROFILE.prompts.topicAppendix ?? ""),
       messages: [{ role: "user", content: answerPrompt(dataset, input.nodeId, input.query) }],
     } as const;
     yield { type: "meta", runId, mode: "online", provider: provider.name };
@@ -267,7 +268,7 @@ export class OnlineAgentService {
         document = research.document;
       } else {
         document = await collectAdaptiveResearch({ provider, dataset, nodeId: input.nodeId, query: input.query, runId,
-          root: !target.primaryParentId, observations, onProgress: input.onProgress, signal: input.signal });
+          root: !target.primaryParentId, observations, onProgress: input.onProgress, signal: input.signal, profile: ACTIVE_PROFILE });
       }
     } catch (error) {
       run = transitionAgentRun(run, "failed", { actor: "knowledge-agent", summary: "研究中断，保留已完成批次", at: now(), changes: { failureCode: "RESEARCH_INCOMPLETE" } });
@@ -287,7 +288,7 @@ export class OnlineAgentService {
     if (!prepared.operations.some((operation) => operation.kind.startsWith("upsert-"))) {
       run = transitionAgentRun(run, "applied", { actor: "development-agent", summary: "研究完成，无可写入提案", at: now() });
       await repository.putRun(run);
-      return { runId, mode: "online", provider: lastProvider, model: lastModel, text: clean(document.answer, 8_000) || "未产生可写入的知识候选。", observations: observations.map(({ round, tool, summary }) => ({ round, tool, summary })), warning: "证据或结构不足，本次未生成写入候选。" };
+      return { runId, mode: "online", provider: lastProvider, model: lastModel, text: document.answer.trim() || "未产生可写入的知识候选。", observations: observations.map(({ round, tool, summary }) => ({ round, tool, summary })), warning: "证据或结构不足，本次未生成写入候选。" };
     }
 
     const proposal: KnowledgeProposal = {
@@ -314,7 +315,7 @@ export class OnlineAgentService {
     if (!review.accepted) {
       run = transitionAgentRun(run, "gate_failed", { actor: "review-agent", summary: "语义或结构门禁拒绝提案", at: now() });
       await repository.putRun(run);
-      return { runId, mode: "online", provider: lastProvider, model: lastModel, text: clean(document.answer, 8_000) || "研究完成，但候选未通过审查。", observations: observations.map(({ round, tool, summary }) => ({ round, tool, summary })), warning: findings.map((item) => item.message).join("；") };
+      return { runId, mode: "online", provider: lastProvider, model: lastModel, text: document.answer.trim() || "研究完成，但候选未通过审查。", observations: observations.map(({ round, tool, summary }) => ({ round, tool, summary })), warning: findings.map((item) => item.message).join("；") };
     }
 
     run = transitionAgentRun(run, "building", { actor: "build-agent", summary: "构建确定性 GraphPatch", at: now() });
@@ -324,7 +325,7 @@ export class OnlineAgentService {
     await repository.putRun(run);
     await repository.putPendingChange({ runId, patchId: patch.id, sessionId: input.sessionId, proposal, review, patch, confirmationToken: issued.token, confirmationExpiresAt: issued.expiresAt });
     const candidate: PendingChangeView = { runId, proposalId: proposal.id, patchId: patch.id, summary: proposal.summary, rationale: proposal.rationale, operations: proposal.candidateOperations, projectionDiff: patch.projectionDiff, findings, confirmationToken: issued.token, confirmationExpiresAt: issued.expiresAt };
-    return { runId, mode: "online", provider: lastProvider, model: lastModel, text: clean(document.answer, 8_000) || proposal.summary, observations: observations.map(({ round, tool, summary }) => ({ round, tool, summary })), candidate };
+    return { runId, mode: "online", provider: lastProvider, model: lastModel, text: document.answer.trim() || proposal.summary, observations: observations.map(({ round, tool, summary }) => ({ round, tool, summary })), candidate };
   }
 
   async prepareCardEdit(input: { sessionId: string; nodeId: string; headline: string; blocks: CardBlock[] }): Promise<PendingChangeView> {

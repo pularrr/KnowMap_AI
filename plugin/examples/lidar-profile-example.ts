@@ -32,14 +32,14 @@ export const LIDAR_TECH_ROUTE_PROFILE: TaskProfile = {
       id: "laser-source",
       name: "光源与发射系统",
       description: "激光器、发射光学、扫描方式和光束控制",
-      visualBranch: "hardware",
+      visualBranch: "system",
       order: 20,
     },
     {
       id: "receiver-detector",
       name: "接收与探测系统",
       description: "探测器、接收光学、信号放大和噪声处理",
-      visualBranch: "hardware",
+      visualBranch: "system",
       order: 30,
     },
     {
@@ -53,7 +53,7 @@ export const LIDAR_TECH_ROUTE_PROFILE: TaskProfile = {
       id: "point-cloud-algorithm",
       name: "点云处理与算法",
       description: "点云滤波、分割、检测、跟踪和配准算法",
-      visualBranch: "algorithm",
+      visualBranch: "data",
       order: 50,
     },
     {
@@ -67,13 +67,13 @@ export const LIDAR_TECH_ROUTE_PROFILE: TaskProfile = {
       id: "application-scenario",
       name: "应用场景与评价",
       description: "自动驾驶、机器人、测绘等应用场景和性能评价",
-      visualBranch: "application",
+      visualBranch: "ai",
       order: 70,
     },
   ],
 
   // 5 个视觉分支
-  visualBranches: ["foundation", "hardware", "signal", "algorithm", "system", "application"],
+  visualBranches: ["foundation", "system", "signal", "data", "ai"],
 
   // 11 种基础节点类型（复用）
   nodeTypes: [
@@ -126,15 +126,15 @@ export const LIDAR_TECH_ROUTE_PROFILE: TaskProfile = {
   // 验证配置
   validation: {
     domainCount: 7,
-    visualBranchCount: 6,
+    visualBranchCount: 5,
     rootNodeRequired: true,
   },
 
   // 提示词
   prompts: {
     react: "你是采用 ReAct 的知识检索 Agent，用于生成激光雷达技术路线知识网络。Observe 当前节点及前轮发现；判断缺口；Act 深入一个尚未解决的问题，输出一批实质知识；再观察覆盖度。优先比较同层解决方案，再深入子问题和依赖。定义、原理、假设、正反例、工程取舍、验证、实现、应用与研究均需考察。每批累积后统一合并，不要逐条调用图内查重工具。新增节点可引用本批或此前批次新节点ID作为父级。说明无法证实的主张。只有连续多轮没有实质新增时才标记收敛。\n\n【节点粒度硬约束】1. 一个节点只放一个东西，由 nodeType 决定。2. 禁止多个并列概念/方法/问题放一个节点。3. problem 节点只描述问题/现象，禁止混入解决方法。4. 节点名称≤15字，禁止并列连词。5. shortFact≤50字。",
-    review: "",
-    finalResponse: "",
+    review: "审查激光雷达知识的粒度、来源、适用条件与关系方向；未经核验的结论明确标记。",
+    finalResponse: "围绕用户的问题直接回答，使用 Markdown 和 LaTeX，说明激光雷达方案的适用条件和证据。",
     ingest: {},
     topicAppendix: "本知识网络聚焦激光雷达技术路线领域，覆盖原理、光源、接收、信号处理、点云算法、系统集成与应用全链路。",
   },

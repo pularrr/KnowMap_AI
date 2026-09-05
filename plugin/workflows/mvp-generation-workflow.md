@@ -1,87 +1,18 @@
-# 工作流 2：MVP 生成工作流
+# Step 2：生成 MVP 并确认方向
 
-## 目标
-快速生成最小骨架，让用户判断方向是否正确。
+输入：已验证 Profile 和主题。输出：生成结果信封，含 profile、network、mode、warnings、stats。先读 [MVP 提示词](../prompts/mvp-generation-prompt.md)。
 
-## 触发条件
-- Profile 设计完成后
-- 用户要求生成知识网络
+用以下可执行 Node 命令组装请求（也可用宿主文件工具编写同样 JSON）：
+```sh
+node --input-type=module -e "import fs from 'node:fs'; const profile=JSON.parse(fs.readFileSync('work/profile.json','utf8')); fs.writeFileSync('work/mvp-request.json',JSON.stringify({topic:profile.name,profile}),{flag:'wx'});"
+node scripts/knowmap.mjs mvp --input work/mvp-request.json --output work/mvp.json
+node scripts/knowmap.mjs validate --input work/mvp.json --output work/mvp-validation.json
+```
 
-## 输入
-- 主题
-- Profile（完整或简化版）
-- LLM 配置
+工具实际调用 KnowledgeGenerator(..., "mvp").generate() → collectAdaptiveResearch。根主题2–3轮、最多2次浅搜索、不遍历候选子节点、不启动拆分子调用、最多5分钟。重试计入调用预算。参考15–30节点；范围小可以更少，不能为凑数放宽粒度或启动完整研究。
 
-## 参数
-- 节点数：15-30 个
-- 深度：根节点 + 一级域 + 每域 2-3 个核心概念
-- 栏目：只填 definition
-- ReAct 轮次：2-3 轮
-- 不调用 web_search，仅用模型知识
-- 时间：2-5 分钟
+展示：域划分、父子树、节点总数、2–3张示例卡、warning 和未核验来源。问用户方向是否合适；已有明确确认则沿用。用户调整后修改 Profile/网络，重新校验和展示。不要在未确认时启动 full。
 
-## 步骤
+验证：所有节点可达根、卡片引用存在、卡片为 definition；查看 stats.rounds、distributedCalls，不能用进度事件数冒充模型轮次。
 
-### Step 1：初始化
-1. 创建根节点（Profile.initialization.rootNode）
-2. 初始化知识网络（nodes/cardBlocks/relations）
-
-### Step 2：生成一级域节点
-1. 遍历 Profile.domains
-2. 为每个域创建一个 domain 类型节点
-3. 父节点为根节点
-4. 只填 definition 栏目
-
-### Step 3：ReAct 循环（2-3 轮）
-每轮执行：
-1. **Observe**：评估当前知识网络的覆盖度
-   - 每个域的节点数
-   - 核心概念是否缺失
-   - 栏目填充率
-2. **Act**：调用 LLM 生成一批新知识
-   - 每域生成 2-3 个核心概念节点
-   - 只填 definition 栏目
-   - 生成父子关系和必要的跨节点语义关系
-3. **批量合并**：
-   - 按 id/名称去重节点
-   - 按 nodeId+type 去重卡片
-   - 按 source+target+type 去重关系
-4. **收敛判断**：
-   - 新增节点 < 2 时收敛
-   - 达到 15-30 节点时收敛
-   - 达到 2-3 轮时结束
-
-### Step 4：节点粒度审查
-1. 检查每个节点是否只放一个概念
-2. 检查 problem 节点是否混入解决方法
-3. 检查节点名称是否 ≤20 字
-4. 检查 shortFact 是否 ≤80 字
-5. 不符合的节点标记为 warning，不阻塞合并
-
-### Step 5：输出 MvpOutput
-1. Profile 摘要（域划分、节点类型、根节点）
-2. MVP 知识网络骨架（节点列表 + 层级关系）
-3. 2-3 个示例卡片（展示知识粒度和质量）
-4. 3-5 个可能的调整方向
-
-## 输出
-- MvpOutput JSON
-- 简化版知识网络（可写入 data/runtime/knowledge-state.json）
-
-## 验证标准
-- [ ] 节点数在 15-30 范围内
-- [ ] 每个节点只填 definition 栏目
-- [ ] 节点符合"一个节点一个概念"约束
-- [ ] Profile 设计合理（域划分有逻辑，根节点明确）
-- [ ] 示例卡片展示了知识粒度和质量
-- [ ] 生成时间在 2-5 分钟内
-- [ ] 每个域至少有 2 个节点
-
-## 常见问题
-| 问题 | 解决方案 |
-| --- | --- |
-| 节点数量不足 | 增加 ReAct 轮次，或在提示词中强调每域生成 2-3 个核心概念 |
-| 节点质量差（多概念） | 优化提示词，增加节点粒度约束的正例/反例 |
-| 域节点缺失 | 在初始化时强制为每个域创建节点 |
-| 关系缺失 | 在提示词中强调生成父子关系和跨节点语义关系 |
-| 生成时间过长 | 限制 ReAct 轮次（最多 3 轮），限制每轮生成节点数（最多 15 个） |
+如果没有可用提供商，可由具备检索能力的宿主按提示词产出同样 {topic,profile,network} 信封并校验，但要写明“宿主生成”，不得声称执行了本地 ReAct。API Key 配置失败时不得伪造在线成功。

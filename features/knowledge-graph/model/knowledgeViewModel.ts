@@ -1,5 +1,5 @@
 import {
-  branchMeta,
+  branchMeta as baselineBranchMeta,
   type FormulaMeta,
   type FormulaSymbol,
   type KnowledgeNode as LegacyKnowledgeNode,
@@ -8,7 +8,14 @@ import { projectVisibleGraph } from "../../../core/knowledge/traversal";
 import type { CardBlock, EdgeType, KnowledgeDataset } from "../../../core/knowledge/schema";
 import { expandedKnowledgeDataset } from "../../../data/knowledge/deep-slices";
 
-export { branchMeta };
+import { ACTIVE_PROFILE } from "../../../profiles/active";
+export const branchMeta = ACTIVE_PROFILE.id === "fmcw-radar" ? baselineBranchMeta : {
+  foundation: { ...baselineBranchMeta.foundation, label: "基础原理" },
+  signal: { ...baselineBranchMeta.signal, label: "信号处理" },
+  data: { ...baselineBranchMeta.data, label: "数据与算法" },
+  system: { ...baselineBranchMeta.system, label: "系统与硬件" },
+  ai: { ...baselineBranchMeta.ai, label: "应用与学习" },
+};
 export type { FormulaSymbol, LegacyKnowledgeNode as KnowledgeNode };
 
 export type KnowledgeCardSection = {

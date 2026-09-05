@@ -6,6 +6,11 @@ import { CARD_SECTION_CATALOG } from "../../core/knowledge/card-section-catalog"
 import { executeKnowledgeTool, type KnowledgeToolObservation } from "./knowledge-tools";
 import { requestResearch, type ResearchDocument } from "./research-output";
 import type { TaskProfile } from "../../plugin/contracts/task-profile";
+import { boundedContext } from "./research-budget";
+
+export interface ResearchStats {
+  rounds: number; calls: number; distributedCalls: number; visitedTopics: number; stopReason: string;
+}
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -49,12 +54,15 @@ export async function collectAdaptiveResearch(input: {
   budgetOverride?: Partial<ReturnType<typeof researchBudget>>;
   signal?: AbortSignal;
   profile?: TaskProfile;  // 新增：注入 Profile 配置，未提供时使用 FMCW 默认
+  maxExternalSearches?: number;
+  allowDistributed?: boolean;
+  onStats?: (stats: ResearchStats) => void;
 }): Promise<ResearchDocument> {
   const { provider, dataset, observations } = input;
 
   // 从 Profile 读取配置，未提供时使用 FMCW 默认
   const sectionMetadata = input.profile?.cardSections ?? CARD_SECTION_CATALOG;
-  const reactPrompt = input.profile?.prompts?.react ?? DEFAULT_REACT_PROMPT;
+  const reactPrompt = (input.profile?.prompts?.react ?? DEFAULT_REACT_PROMPT) + "\n" + (input.profile?.prompts.topicAppendix ?? "");
   const budget = {
     ...researchBudget(dataset.nodes.length, input.root),
     ...(input.profile?.initialization && input.root
@@ -69,6 +77,9 @@ export async function collectAdaptiveResearch(input: {
       : {}),
     ...input.budgetOverride,
   };
+  budget.maxDurationMs = Math.min(budget.maxDurationMs, 35 * 60_000);
+  const stats: ResearchStats = { rounds: 0, calls: 0, distributedCalls: 0, visitedTopics: 0, stopReason: "" };
+  let externalSearches = 0;
   const started = Date.now();
   const deadline = AbortSignal.any([AbortSignal.timeout(budget.maxDurationMs),...(input.signal ? [input.signal] : [])]);
   const target = dataset.nodes.find((node) => node.id === input.nodeId)!;
@@ -102,10 +113,12 @@ export async function collectAdaptiveResearch(input: {
       return { tool, ...result };
     }) : [{ topic, status: "候选节点，尚未写入图谱" }];
     for (let round = 0; round < limit && !outOfBudget(); round++) {
+      stats.rounds++;
       input.signal?.throwIfAborted();
       report("正在研究“" + topic.name + "” · 第 " + (round + 1) + "/" + limit + " 轮 · 已积累 " + checkpoint.batches.reduce((n, b) => n + b.proposal.newNodes.length, 0) + " 个候选节点");
       let external = "";
-      if ((round === 0 || round === Math.floor(limit / 2)) && checkpoint.externalSearchAvailable) {
+      if ((round === 0 || round === Math.floor(limit / 2)) && checkpoint.externalSearchAvailable && externalSearches < (input.maxExternalSearches ?? Infinity)) {
+        externalSearches++;
         checkpoint.calls++;
         try {
           const result = await provider.createResponse({
@@ -120,14 +133,14 @@ export async function collectAdaptiveResearch(input: {
           report("当前模型接口不支持联网检索，继续使用模型知识扩展；引用核验状态将保留。");
         }
       }
-      const messages: LlmMessage[] = [{ role: "user", content: JSON.stringify({
+      const messages: LlmMessage[] = [{ role: "user", content: boundedContext({
         task: input.query.slice(0, 24000), topic, round: round + 1, context,
         graphIndex: dataset.nodes.map((n) => ({ id: n.id, name: n.canonicalName, parentId: n.primaryParentId })).slice(0, 500),
         pendingNodeIndex: checkpoint.batches.flatMap((b) => b.proposal.newNodes.map((n) => ({ id:n.id || n.canonicalName, name:n.canonicalName, parentId:n.parentId }))).slice(-400),
-        previousFindings: localBatches.map((b) => ({ assessment: b.coverageAssessment, gaps: b.gaps, names: b.proposal.newNodes.map((n) => n.canonicalName), blocks: b.proposal.cardBlocks.map((c) => c.title) })),
+        previousFindings: localBatches.slice(-6).map((b) => ({ assessment: b.coverageAssessment, gaps: b.gaps, names: b.proposal.newNodes.map((n) => n.canonicalName), blocks: b.proposal.cardBlocks.map((c) => c.title) })),
         sources: external,
         sectionMetadata,
-      }).slice(0, 100000) }];
+      }, 100000) }];
       try {
         const { document } = await requestResearch(provider,
           reactPrompt, messages,
@@ -139,23 +152,24 @@ export async function collectAdaptiveResearch(input: {
         let discoveries = document.proposal.newNodes.length + document.proposal.cardBlocks.length;
         // Distributed sub-calls: when gaps or new nodes exceed threshold, split into
         // multiple lightweight calls each focusing on a subset of gaps, reducing per-call load.
-        const needDistribute = (document.gaps.length > 3 || document.proposal.newNodes.length > 8) && !outOfBudget();
+        const needDistribute = input.allowDistributed !== false && (document.gaps.length > 3 || document.proposal.newNodes.length > 8) && !outOfBudget();
         if (needDistribute) {
           report("检测到较多未解决缺口，拆分为分布式子调用降低单次负荷…");
-          const gapGroups = chunkArray(document.gaps, 2).slice(0, 2);
+          const gapGroups = chunkArray(document.gaps.length ? document.gaps : document.proposal.newNodes.map(n => `完善 ${n.canonicalName} 的适用栏目与证据`), 2).slice(0, 2);
           for (const group of gapGroups) {
             if (outOfBudget()) break;
-            const subMessages: LlmMessage[] = [{ role: "user", content: JSON.stringify({
+            const subMessages: LlmMessage[] = [{ role: "user", content: boundedContext({
               task: input.query.slice(0, 24000), topic, round: round + 1,
               context: context.slice(0, 2),
               graphIndex: dataset.nodes.map((n) => ({ id: n.id, name: n.canonicalName, parentId: n.primaryParentId })).slice(0, 200),
               pendingNodeIndex: checkpoint.batches.flatMap((b) => b.proposal.newNodes.map((n) => ({ id:n.id || n.canonicalName, name:n.canonicalName, parentId:n.parentId }))).slice(-200),
               previousFindings: [{ assessment: document.coverageAssessment, gaps: group, names: document.proposal.newNodes.map((n) => n.canonicalName), blocks: document.proposal.cardBlocks.map((c) => c.title) }],
               sources: external, focusGaps: group, sectionMetadata,
-            }).slice(0, 60000) }];
+            }, 60000) }];
             try {
+              stats.distributedCalls++;
               const { document: subDoc } = await requestResearch(provider,
-                "你是采用 ReAct 的知识检索 Agent。本轮为分布式子调用，仅聚焦 focusGaps 中列出的未解决问题。Observe 当前节点及前轮发现；针对指定缺口深入研究；输出一批实质知识。不要重复已有节点和卡片。新增节点可引用本批或此前批次新节点ID作为父级。只有指定缺口全部解决时才标记收敛。", subMessages,
+                reactPrompt + "\n本轮为拆分子调用，仅聚焦 focusGaps。不要重复已有节点和卡片；只有指定缺口全部解决时才标记收敛。", subMessages,
                 { onDiagnostic: report, signal: deadline, onCall: () => {
                   if (outOfBudget()) throw new Error("已达到研究预算");
                   checkpoint.calls++;
@@ -202,12 +216,14 @@ export async function collectAdaptiveResearch(input: {
   checkpoint.stopReason ||= outOfBudget() ? "达到本次时间或调用预算，仍有 " + queue.length + " 个待探索主题" :
     queue.length ? "达到本次节点预算，尚未遍历全部主题" : "本批探索队列已收敛";
   save(); report(checkpoint.stopReason);
+  Object.assign(stats, { calls: checkpoint.calls, visitedTopics: checkpoint.visited.length, stopReason: checkpoint.stopReason });
+  input.onStats?.(stats);
   if (!checkpoint.batches.length) throw new Error("本次研究未获得有效批次。请检查模型连接；失败详情已保留。");
   const batches = checkpoint.batches;
   return {
-    answer: "已研究 " + checkpoint.visited.length + " 个主题，完成 " + batches.length + " 批知识整理。\n\n" + batches.slice(-5).map((b) => b.answer).join("\n\n") + "\n\n" + checkpoint.stopReason,
+    answer: "已研究 " + checkpoint.visited.length + " 个主题，完成 " + batches.length + " 批知识整理。\n\n" + batches.map((b) => b.answer).join("\n\n") + "\n\n" + checkpoint.stopReason,
     coverageAssessment: batches.slice(-8).map((b) => b.coverageAssessment).join("\n"),
-    converged: !queue.length, gaps: batches.slice(-5).flatMap((b) => b.gaps),
+    converged: !queue.length && !outOfBudget() && modelFailures < 3 && batches.slice(-2).every(b => b.converged && !b.gaps.length), gaps: batches.slice(-5).flatMap((b) => b.gaps),
     proposal: { summary: "批量扩充“" + target.canonicalName + "”知识网络", rationale: "逐节点观察、扩充与自检后批量合并。", newNodes: batches.flatMap((b) => b.proposal.newNodes), cardBlocks: batches.flatMap((b) => b.proposal.cardBlocks),
       relations: batches.flatMap((b) => b.proposal.relations), evidence: batches.flatMap((b) => b.proposal.evidence) },
   };

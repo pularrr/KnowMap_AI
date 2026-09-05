@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import { APP_CONFIG } from "./config";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "FMCW Radar Knowledge Flow",
-  description: "FMCW 雷达全栈学习路线与可交互知识图谱",
+  title: APP_CONFIG.appName,
+  description: APP_CONFIG.appSubtitle,
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

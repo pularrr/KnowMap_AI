@@ -10,7 +10,9 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { KnowledgeGenerator } from "../../../../server/agent/knowledge-generator";
-import { FMCW_PROFILE } from "../../../../profiles/fmcw-radar";
+import { ACTIVE_PROFILE } from "../../../../profiles/active";
+import { validateProfile } from "../../../../server/profile/validate-profile";
+import { runtimeLlmConfigStore } from "../../../../server/runtime/app-runtime";
 import { createConfiguredLlmProvider } from "../../../../server/llm/provider-factory";
 import type { TaskProfile } from "../../../../plugin/contracts/task-profile";
 
@@ -21,7 +23,8 @@ export const maxDuration = 300; // 5 分钟超时（MVP 模式）
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { topic, profile: customProfile, profileId, mode = "mvp", writeToFile = false } = body;
+    const { topic, profile: customProfile, profileId, mode = "mvp", writeToFile = false, initialNetwork, confirmedMvp } = body;
+    if (mode !== "mvp") return NextResponse.json({ error: "完整开发请使用 scripts/knowmap.mjs full，避免5分钟HTTP请求限制。" }, { status: 400 });
 
     if (!topic) {
       return NextResponse.json(
@@ -34,19 +37,20 @@ export async function POST(request: NextRequest) {
     let profile: TaskProfile;
     if (customProfile) {
       profile = customProfile;
-    } else if (profileId === "fmcw-radar" || !profileId) {
-      profile = FMCW_PROFILE;
+    } else if (profileId === ACTIVE_PROFILE.id || !profileId) {
+      profile = ACTIVE_PROFILE;
     } else {
       return NextResponse.json(
-        { error: `不支持的 profileId: ${profileId}，当前仅支持 fmcw-radar` },
+        { error: `未知 profileId: ${profileId}；请传入完整 profile 或使用 ${ACTIVE_PROFILE.id}` },
         { status: 400 }
       );
     }
 
     // 使用统一的 LlmProvider（自动处理推理模型兼容、tool_choice 剥离等）
-    const provider = createConfiguredLlmProvider();
+    profile = validateProfile(profile);
+    const provider = createConfiguredLlmProvider({ environment: runtimeLlmConfigStore().environment() });
     const generator = new KnowledgeGenerator(provider, topic, profile, mode);
-    const result = await generator.generate();
+    const result = await generator.generate({ initialNetwork, confirmedMvp, signal: request.signal });
 
     let filePath: string | undefined;
     if (writeToFile) {

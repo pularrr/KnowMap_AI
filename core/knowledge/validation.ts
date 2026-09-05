@@ -1,5 +1,6 @@
 import type { EdgeType, KnowledgeDataset, KnowledgeEdge } from "./schema";
 import type { TaskProfile } from "../../plugin/contracts/task-profile";
+import { ACTIVE_PROFILE } from "../../profiles/active";
 
 /**
  * 验证配置选项
@@ -44,8 +45,8 @@ export function validateKnowledgeDataset(dataset: KnowledgeDataset, options?: Va
 
   // P3-2 Step4：从 Profile 或 options 读取主题相关的验证配置
   // 未提供时使用 FMCW 默认值（11 域、5 分支），保持向后兼容
-  const expectedDomainCount = options?.domainCount ?? options?.profile?.validation.domainCount ?? 11;
-  const expectedVisualBranchCount = options?.visualBranchCount ?? options?.profile?.validation.visualBranchCount ?? 5;
+  const expectedDomainCount = options?.domainCount ?? options?.profile?.validation.domainCount ?? ACTIVE_PROFILE.validation.domainCount;
+  const expectedVisualBranchCount = options?.visualBranchCount ?? options?.profile?.validation.visualBranchCount ?? ACTIVE_PROFILE.validation.visualBranchCount;
 
   const domainIds = new Set<string>();
   for (const domain of dataset.domains) {

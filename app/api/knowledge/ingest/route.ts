@@ -72,7 +72,8 @@ export async function POST(request: Request) {
     }
 
     const stagedWithMatches: typeof staged = { ...staged, matches };
-    const promptTemplate = INGEST_PROMPTS[kind] ?? INGEST_PROMPTS.document;
+    const { ACTIVE_PROFILE } = await import("../../../../profiles/active");
+    const promptTemplate = ACTIVE_PROFILE.prompts.ingest[kind] || INGEST_PROMPTS[kind] || INGEST_PROMPTS.document;
     const result = await onlineAgentService().deepSearch({
       sessionId: body.sessionId,
       nodeId: body.nodeId,

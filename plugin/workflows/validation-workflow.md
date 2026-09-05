@@ -1,113 +1,45 @@
-# 工作流 6：验证与迭代工作流
+# Step 4–7：审查、创建应用、注入、交付
 
-## 目标
-验证生成的知识图谱应用是否符合要求，不合格就定位修复问题，迭代版本。
+输入：含 profile 和 network 的生成结果。读取 [知识审查提示词](../prompts/knowledge-review-prompt.md)。
 
-## 触发条件
-- MVP 生成完成后
-- 完整开发完成后
-- 用户要求验收
+## 1. 结构和语义审查
 
-## 验证维度
+```sh
+node scripts/knowmap.mjs validate --input work/full.json --output work/full-review.json
+```
 
-### 1. Profile 设计验证
-- [ ] 域数量在 3-8 范围内
-- [ ] 视觉分支数量在 3-5 范围内
-- [ ] 节点类型在 8-15 范围内
-- [ ] 边类型在 8-15 范围内
-- [ ] 栏目包含基础 13 个
-- [ ] 所有必填字段完整
-- [ ] 域划分有逻辑，覆盖主题主要方面
-- [ ] 根节点明确
+networkToDataset 先检查字段、根、父级、类型、域、栏目，再调用 validateKnowledgeDataset 检查结构和四条粒度规则。error 阻止通过；warning 必须逐项评估，不代表已经修复。模型产生的来源需要核验，禁止伪造论文信息。
 
-### 2. MVP 验证
-- [ ] 节点数在 15-30 范围内
-- [ ] 每个节点只填 definition 栏目
-- [ ] 节点符合"一个节点一个概念"约束
-- [ ] problem 节点无解决方法混入
-- [ ] 每个域至少有 2 个节点
-- [ ] 关系合理（父子关系 + 跨节点语义关系）
-- [ ] 示例卡片展示了知识粒度和质量
-- [ ] 生成时间在 2-5 分钟内
+用宿主文件工具将修复结果保存为 work/reviewed.json，保留 {topic,profile,network}。拆分多概念节点时修正所有引用；名称过长应重新命名而不是截断；problem 只留问题，方法另建节点并使用 MITIGATES。重跑：
+```sh
+node scripts/knowmap.mjs validate --input work/reviewed.json --output work/reviewed-validation.json
+```
+结构错误的命令返回非0。报告 valid:true 只表示结构合格，不能证明事实正确。
 
-### 3. 完整开发验证
-- [ ] 节点数在 80-150 范围内
-- [ ] 知识卡栏目完整（5+ 栏目）
-- [ ] 核心栏目填充率 >50%
-- [ ] 节点符合"一个节点一个概念"约束
-- [ ] problem 节点无解决方法混入
-- [ ] 每个域至少有 5 个节点
-- [ ] 关系合理（父子关系 + 跨节点语义关系）
-- [ ] 语义审查和结构校验通过
-- [ ] 应用可以独立运行
-- [ ] 应用支持问答、深度检索、资料整理
-- [ ] 生成时间在 25-40 分钟内
+## 2. 创建并注入
 
-### 4. FMCW 基线回归验证
-- [ ] tsc 类型检查通过
-- [ ] 6 项自动化测试全通过
-- [ ] FMCW 应用所有现有功能正常
-- [ ] 域显示不变
-- [ ] 节点类型不变
-- [ ] 知识卡栏目不变
-- [ ] Agent 生成质量不下降
+确保 work/profile.json 与 reviewed.json 中的 profile 完全一致。若 Profile 在审查阶段改变，应返回 MVP 确认。
+```sh
+node scripts/create-app.mjs --profile-file work/profile.json --name my-map --output work/my-map
+node scripts/knowmap.mjs inject --input work/reviewed.json --output work/my-map
+```
 
-### 5. 功能验证
-- [ ] SSE 流式聊天正常
-- [ ] Markdown/LaTeX 渲染正确
-- [ ] 字号设置正常
-- [ ] 图谱拖动/缩放/点击正常
-- [ ] 知识树侧边栏正常
-- [ ] 知识卡详情正常
-- [ ] 深度检索正常
-- [ ] 资料整理正常
-- [ ] 对话总结正常
-- [ ] 推理模型兼容（无 tool_choice 报错）
+脚手架复用模板 UI 和当前共享引擎，生成 profiles/active.json、active.ts 和 app/config.ts。输出目录已存在、Profile 缺失或不兼容时拒绝创建。
 
-### 6. 性能验证
-- [ ] MVP 生成时间 <5 分钟
-- [ ] 完整开发生成时间 <40 分钟
-- [ ] 单次 LLM 调用输入 <120000 字符
-- [ ] 单次 LLM 调用输出 <16384 tokens
-- [ ] 分布式子调用正常触发
-- [ ] 上下文管理有效（不超出窗口）
+注入必须在首次启动应用前运行。inject 使用 RuntimeKnowledgeRepository 创建 state/checksum 封装并回读。已有 knowledge-state.json 或备份时拒绝覆盖；如需更新已运行应用，使用应用内研究提案和确认流程。
 
-## 迭代流程
+## 3. 在产物目录验收
 
-### Step 1：定位问题
-1. 运行验证清单，标记不通过项
-2. 分析问题根因（提示词/代码/数据/配置）
-3. 记录问题详情（复现步骤、预期结果、实际结果）
+```sh
+npm install
+npm run type-check
+npm test
+npm run build
+npm run dev
+```
 
-### Step 2：修复问题
-1. 优先修复阻塞性问题（应用无法运行、数据丢失）
-2. 其次修复质量问题（节点粒度、栏目填充）
-3. 最后修复体验问题（UI、性能）
-4. 每修复一个问题，验证是否引入新问题
+逐项记录真实结果：页面显示所选主题；根和域符合 Profile；点击节点卡片有正文；图谱缩放/拖动；Markdown 表格和 LaTeX；字号修改与刷新保存；离线回答；配置提供商后的在线聊天、深搜和资料导入。检查 /api/knowledge 返回正确节点数。
 
-### Step 3：验证修复
-1. 重新运行验证清单
-2. 确认原问题已修复
-3. 确认无新问题引入
-4. 运行 FMCW 基线回归测试
+原始项目回归另执行 npm test 和 npm run test:plugin。生成应用 npm test 使用通用 Profile/状态往返测试，不用固定 FMCW 节点名称作为其他主题的通过标准。
 
-### Step 4：版本迭代
-1. 记录修复内容到开发报告
-2. 更新版本号
-3. Git commit（每步独立 commit）
-4. 如需要，打 tag 标记稳定版本
-
-## 常见问题定位
-
-| 问题 | 可能原因 | 定位方法 | 修复方向 |
-| --- | --- | --- | --- |
-| 节点包含多个概念 | 提示词约束不足 | 检查生成的节点名称和 shortFact | 优化提示词，增加正例/反例 |
-| problem 节点混入解决方法 | problem 约束不明确 | 检查 problem 节点的 shortFact | 增加 PROBLEM_NODE_HAS_SOLUTION 审查 |
-| 重复节点多 | 去重逻辑不完善 | 检查节点 id 和名称 | 优化批量合并，增加语义相似度去重 |
-| 栏目填充率低 | 提示词未强调栏目 | 检查知识卡栏目分布 | 在提示词中强调核心栏目填充 |
-| LLM 输出无效 JSON | 输出格式约束不足 | 检查 finalResponse 输出 | 两阶段输出 + 空响应重试 |
-| 上下文超出窗口 | 观察结果过大 | 检查输入 token 数 | compactObservation + rollingContext |
-| 应用无法运行 | 类型错误/依赖缺失 | 运行 tsc 和 npm run dev | 修复类型错误，安装依赖 |
-| 推理模型报错 | tool_choice 不支持 | 检查错误信息 | isReasoningModel 剥离 tool_choice |
-| 生成时间过长 | ReAct 轮次过多 | 检查迭代次数和时间 | 增加早期停止条件，分布式子调用 |
-| 资料整理功能不可用 | API 路由未注册/提示词问题 | 检查路由和提示词 | 修复路由，优化提示词 |
+交付记录列出输出目录、启动方式、节点/卡片/域数量、已测项目、未核验事实、研究停止原因、真实模型与浏览器是否测试。不能把复制完成、结构校验通过或模拟提供商测试写成全部验收通过。

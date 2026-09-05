@@ -19,8 +19,8 @@ type LlmStatus = { configured: boolean; provider: string; baseUrl: string; model
 
 export default function Home() {
   const [dataset, setDataset] = useState<KnowledgeDataset>(expandedKnowledgeDataset);
-  const [focusId, setFocusId] = useState(APP_CONFIG.rootNodeId);
-  const [selectedId, setSelectedId] = useState(APP_CONFIG.rootNodeId);
+  const [focusId, setFocusId] = useState<string>(APP_CONFIG.rootNodeId);
+  const [selectedId, setSelectedId] = useState<string>(APP_CONFIG.rootNodeId);
   const [dark, setDark] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [configOpen, setConfigOpen] = useState(false);

@@ -5,6 +5,7 @@ import type { AgentInteractionResult, PendingChangeView } from "../../../core/ag
 import type { KnowledgeNode } from "../../knowledge-graph/model/knowledgeViewModel";
 import { appendKnowledgeHistory } from "../../knowledge-graph/model/knowledgeHistory";
 import { MarkdownMessage } from "./MarkdownMessage";
+import { ACTIVE_PROFILE } from "../../../profiles/active";
 
 type PanelMode = "collapsed" | "compact" | "overlay";
 type MessageRole = "user" | "assistant";
@@ -157,7 +158,7 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
       <header className="graph-agent-head">
         <div><span>AI AGENT</span><strong>{selected.title}</strong></div>
         <div className="graph-agent-actions">
-          <button className="summary-button" onClick={() => void loadReference()} disabled={busy}>基准扩充</button>
+          {ACTIVE_PROFILE.id === "fmcw-radar" && <button className="summary-button" onClick={() => void loadReference()} disabled={busy}>基准扩充</button>}
           <button className="deep-search-button" onClick={() => void run("deep-search")} disabled={busy}>深度搜索</button>
           <button className="summary-button" onClick={() => void summarize()} disabled={busy}>总结并补充知识</button>
           <label className="summary-button file-upload-label" aria-disabled={busy}>
