@@ -5,9 +5,11 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const sessionId = new URL(request.url).searchParams.get("sessionId");
+  const params = new URL(request.url).searchParams;
+  const sessionId = params.get("sessionId");
   if (!sessionId) return NextResponse.json({ error: "缺少会话标识" }, { status: 400 });
-  return NextResponse.json({ jobs: listAgentJobs(sessionId) }, { headers: { "cache-control": "no-store" } });
+  const limit = Number(params.get("limit") ?? 20);
+  return NextResponse.json(listAgentJobs(sessionId, { cursor: params.get("cursor") ?? undefined, limit: Number.isFinite(limit) ? limit : 20 }), { headers: { "cache-control": "no-store" } });
 }
 export async function POST(request: Request) {
   try {

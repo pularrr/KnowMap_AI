@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
@@ -15,7 +18,31 @@ const { toLegacyKnowledgeNodes } = await vite.ssrLoadModule("/features/knowledge
 const layout = await vite.ssrLoadModule("/features/knowledge-graph/layout/legacySvgLayout.ts");
 const adaptive = await vite.ssrLoadModule("/server/agent/adaptive-research.ts");
 const budgets = await vite.ssrLoadModule("/server/agent/research-budget.ts");
+const stores = await vite.ssrLoadModule("/server/agent/job-store.ts");
 const response = (text) => ({id:"mock",provider:"test",model:"test",status:"completed",text,toolCalls:[],session:{previousResponseId:"mock"}});
+
+test("job storage separates metadata from full text and reads UTF-8 chunks without truncation", () => {
+  const directory = mkdtempSync(join(tmpdir(), "knowmap-jobs-"));
+  try {
+    const store = new stores.FileJobStore(directory);
+    const text = "第一行\n🚗雷达知识\n".repeat(8000);
+    const job = { id:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", sessionId:"session-a", nodeId:"root", kind:"deep-search", query:"研究", state:"completed", createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), textBytes:0, textChecksum:"", revision:1 };
+    store.save(job, text);
+    assert.equal(readFileSync(join(directory, job.id + ".json"), "utf8").includes("第一行"), false);
+    assert.equal("text" in store.list("session-a")[0], false);
+    let cursor = 0; let restored = ""; let chunks = 0; let checksum = "";
+    do {
+      const part = store.readText(job.id, "session-a", cursor, 4097);
+      restored += part.text; chunks += 1; checksum = part.checksum;
+      if (part.nextCursor === null) break;
+      cursor = part.nextCursor;
+    } while (true);
+    assert.ok(chunks > 1);
+    assert.equal(restored, text);
+    assert.equal(checksum, store.load(job.id).job.textChecksum);
+    assert.throws(() => store.readText(job.id, "session-b", 0, 4096), /不存在/);
+  } finally { rmSync(directory, { recursive:true, force:true }); }
+});
 
 test("JSON envelope, fences, aliases and optional nulls normalize without losing code or LaTeX", () => {
   const source = { data:{answer:"result",proposal:{new_nodes:[{id:"example",name:"例子",description:"定义",parent_id:"least-squares",blocks:[{type:"code",title:"实现",code:"x = solve(A, b)",language:"python",text:""}]}],card_blocks:[{node_id:"least-squares",type:"principle",title:"公式",content:"$\\hat{x}$"}],evidence:[{title:"领域资料",url:null}]}} };

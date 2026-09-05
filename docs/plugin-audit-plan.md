@@ -33,6 +33,8 @@
 
 ## 后续改进：可靠后台任务与长回答（P3-7）
 
+实施状态：2026-09-05 已完成长驻 Node 第一阶段，包括存储接口、任务/正文分离、列表分页、结果分段、checksum、会话隔离、明确中断状态及 deep-search 202 后台入口。外部队列、独立 Worker、lease/heartbeat 和自动断点恢复属于第二阶段，需选定 Serverless 部署提供商后接入；详见 `docs/dev-reports/p3-7-long-job-reliability.md`。
+
 当前 `POST /api/agent/jobs` 虽然先返回 `202`，但任务仍由同一个 Node 进程中的异步函数执行，状态写入本机 `data/runtime/jobs`。这能避免浏览器切页、刷新或断开连接直接取消任务，但不等于独立后台任务系统。
 
 在 Serverless 环境中，请求结束后实例可能冻结或销毁；后续轮询也可能命中另一实例。本机内存、`globalThis`、本机文件和未 `await` 的异步任务都不能作为可靠状态。因此当前实现只支持长驻 Node 服务，部署到 Serverless 前必须完成以下改造：

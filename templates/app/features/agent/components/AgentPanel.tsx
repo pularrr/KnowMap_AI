@@ -27,6 +27,7 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
   const [error, setError] = useState("");
   const [ingestKind, setIngestKind] = useState<IngestKind>("document");
   const threadRef = useRef<HTMLDivElement>(null);
+  const jobTextCache = useRef(new Map<string, { revision: number; text: string }>());
 
   useEffect(() => {
     const thread = threadRef.current;
@@ -41,13 +42,32 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
       try {
         const response = await fetch("/api/agent/jobs?sessionId=" + encodeURIComponent(sessionId), { cache: "no-store" });
         if (!response.ok) throw new Error("任务状态加载失败");
-        const { jobs } = await response.json() as { jobs: Array<{ id: string; nodeId: string; kind: string; query: string; text: string; state: string; progress?: string; result?: AgentInteractionResult; error?: string }> };
+        const { jobs } = await response.json() as { jobs: Array<{ id: string; nodeId: string; kind: string; query: string; state: string; revision: number; progress?: string; hasResult: boolean; error?: string }> };
+        const hydrated = await Promise.all(jobs.map(async (job) => {
+          const cached = jobTextCache.current.get(job.id);
+          let result: Omit<AgentInteractionResult, "text"> | undefined;
+          if (job.hasResult) {
+            const detailResponse = await fetch(`/api/agent/jobs/${encodeURIComponent(job.id)}?sessionId=${encodeURIComponent(sessionId)}`, { cache: "no-store" });
+            if (!detailResponse.ok) throw new Error("任务详情加载失败");
+            result = (await detailResponse.json() as { job: { result?: Omit<AgentInteractionResult, "text"> } }).job.result;
+          }
+          if (cached?.revision === job.revision) return { ...job, result, text: cached.text };
+          let cursor: number | null = 0; let text = "";
+          while (cursor !== null) {
+            const resultResponse = await fetch(`/api/agent/jobs/${encodeURIComponent(job.id)}/result?sessionId=${encodeURIComponent(sessionId)}&cursor=${cursor}`, { cache: "no-store" });
+            if (!resultResponse.ok) throw new Error("任务结果加载失败");
+            const chunk = await resultResponse.json() as { text: string; nextCursor: number | null };
+            text += chunk.text; cursor = chunk.nextCursor;
+          }
+          jobTextCache.current.set(job.id, { revision: job.revision, text });
+          return { ...job, result, text };
+        }));
         if (!cancelled) setMessages((current) => [
           ...current.filter((item) => !item.id.startsWith("job-")),
-          ...jobs.flatMap((job): Message[] => [
+          ...hydrated.reverse().flatMap((job): Message[] => [
             { id: "job-user-" + job.id, role: "user", label: "你", text: job.query },
             { id: "job-reply-" + job.id, role: "assistant", label: job.kind === "chat" ? "AI 回答" : job.kind === "deep-search" ? "深度搜索" : "知识整理",
-              text: job.text || job.error || job.progress || "", streaming: job.state === "running", result: job.result },
+              text: job.text || job.error || job.progress || "", streaming: job.state === "running" || job.state === "queued", result: job.result ? { ...job.result, text: job.text } as AgentInteractionResult : undefined },
           ]),
         ]);
       } catch { /* The server task continues; reconnect on the next poll. */ }
