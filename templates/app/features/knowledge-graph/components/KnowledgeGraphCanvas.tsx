@@ -7,6 +7,7 @@ import {
   getVisibleRelationsFromDataset,
 } from "../model/knowledgeViewModel";
 import type { KnowledgeDataset } from "../../../core/knowledge/schema";
+import { APP_CONFIG } from "../../../app/config";
 import {
   NODE_H,
   NODE_W,
@@ -48,7 +49,7 @@ export function KnowledgeGraphCanvas({
 
   useEffect(() => {
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const stored = window.localStorage.getItem("fmcw-edge-flow");
+    const stored = window.localStorage.getItem(`${APP_CONFIG.storagePrefix}-edge-flow`);
     setEdgeFlow(!reduced && stored !== "off");
   }, []);
 
@@ -140,7 +141,7 @@ export function KnowledgeGraphCanvas({
                   event.target.checked &&
                   !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
                 setEdgeFlow(next);
-                window.localStorage.setItem("fmcw-edge-flow", next ? "on" : "off");
+                window.localStorage.setItem(`${APP_CONFIG.storagePrefix}-edge-flow`, next ? "on" : "off");
               }}
             />
             <i />
@@ -166,7 +167,7 @@ export function KnowledgeGraphCanvas({
         viewBox={`0 0 ${WORLD.width} ${WORLD.height}`}
         preserveAspectRatio="xMidYMid meet"
         role="img"
-        aria-label="渐进披露式 FMCW 雷达知识图谱"
+        aria-label={`渐进披露式 ${APP_CONFIG.appName}`}
         onWheel={(event) => {
           event.preventDefault();
           zoom(event.deltaY < 0 ? 1.06 : 0.94);

@@ -43,6 +43,125 @@ KnowMap 是一个面向主题知识网络的 AI 原生应用框架。它的核�
 - **所有写入都可审查**：模型输出先成为待审查声明，再经过校验、差异预览和一次性确认，最后以新版本追加写入。
 - **离线能力是安全底座**：没有 API Key 时仍可浏览图谱、查看卡片、进行本地问答和缺口分析；联网模型是增强能力，不是数据安全的前提。
 
+## 技术介绍
+
+### 技术栈
+
+KnowMap 使用 TypeScript 作为主开发语言，采用 Next.js App Router 构建 Web 应用，React 负责交互界面，Tailwind CSS 和自定义 CSS 负责视觉层。知识卡片中的数学公式使用 KaTeX 渲染，结构化输入和模型输出使用 Zod 进行运行时校验。
+
+| 技术领域 | 采用方案 | 作用 |
+| --- | --- | --- |
+| 应用框架 | Next.js 16、React 19、TypeScript 5.9 | 页面、服务端 API 和类型安全 |
+| 样式与交互 | Tailwind CSS 4、React Hook Form、Radix UI 相关组件 | 响应式布局、表单和交互组件 |
+| 知识展示 | SVG 图谱、知识树、KaTeX、React Markdown | 层级导航、关系可视化、公式和资料渲染 |
+| 数据契约 | Zod、TypeScript contracts | Profile、知识网络、运行时状态和 Agent 输出校验 |
+| 本地数据 | JSON 运行时仓、浏览器存储 | 离线运行、初始数据和版本化状态 |
+| 服务端数据 | PostgreSQL、Drizzle ORM | 可选的持久化部署和迁移 |
+| 异步任务 | Redis、任务队列、独立 Worker | 深度研究、长任务和后台 Agent 执行 |
+| 对象存储 | S3 兼容对象存储适配器 | 可选的资料与文件存储 |
+| 测试与构建 | Node Test Runner、Vite、ESLint、Next Build | 契约测试、类型检查、规范检查和生产构建 |
+
+### 系统分层
+
+项目按“主题配置—领域模型—应用用例—基础设施—界面”分层，插件构建层和应用运行层共用领域契约，但不混淆执行职责。
+
+```text
+宿主 LLM / 用户主题
+          ↓
+plugin/ + scripts/                 插件构建层
+  Profile → MVP → network → validate → create-app → inject
+          ↓
+templates/app/                     独立应用模板
+          ↓
+app/ + features/                   UI 与交互
+          ↓
+server/agent/ + server/runtime/   Agent 用例、任务、版本与运行时仓
+          ↓
+core/knowledge/ + core/ingestion/  知识模型、校验、遍历与资料摄取
+          ↓
+JSON / PostgreSQL / Redis / S3     可替换基础设施
+```
+
+- `core/` 保存与主题无关的领域规则，包括知识节点、关系、卡片栏目、公式、证据、遍历和校验。
+- `profiles/` 保存主题差异，包括根节点、知识域、允许的节点/边类型、卡片栏目和研究规则。
+- `server/` 编排运行时用例，包括 Agent 工作流、深度研究、任务队列、知识仓、保存点和审计。
+- `features/` 提供知识图谱、知识卡和 Agent 面板等前端功能，尽量通过用例接口访问数据。
+- `plugin/` 和 `scripts/` 只负责从主题生成新的应用，不是运行时内容本身。
+
+### 知识数据模型
+
+构建阶段的 `KnowledgeNetwork` 是适合宿主 LLM 生成和人工审查的网络格式，主要由节点、卡片块、关系和证据组成。注入后会转换成应用运行时使用的 `KnowledgeDataset`：
+
+```text
+KnowledgeDataset
+├─ domains       知识域与视觉分支
+├─ nodes         节点身份、规范名称、短事实、父子层级
+├─ cards         节点摘要与定义/原理/验证等卡片块
+├─ edges         有类型、有理由的语义关系
+├─ formulas      LaTeX 公式与符号解释
+└─ revision      当前版本、保存点和审计关联
+```
+
+节点身份、卡片内容和语义关系分开存储，使图谱结构、卡片内容和 UI 展示可以独立校验。主题 Profile 决定哪些类型和栏目适用于当前应用，避免把 FMCW 雷达的栏目机械复制到其他主题。
+
+### AI Agent 与受控写入
+
+应用中的 AI 不是一个可以直接修改数据库的自由代理，而是被限制在明确能力边界内的 Agent。典型运行路径如下：
+
+1. `Context Builder` 根据当前节点、邻域、相关卡片、用户资料和任务类型组装上下文。
+2. LLM 或本地 Agent 返回回答、摘要、知识声明或研究候选。
+3. 输出经过 JSON 归一化、Profile 规则和 Zod Schema 校验。
+4. Review 检查层级、关系端点、环、栏目适用性、证据和悬空引用。
+5. Build 将通过审查的声明转换为确定性的 `GraphPatch`，生成差异预览。
+6. 用户确认后才写入新的 revision，并追加审计事件；拒绝或失败不会写入知识仓。
+
+因此，模型负责语义判断，代码负责结构安全和状态变化。离线 Agent 与真实 LLM 共用这条边界，替换模型不会改变图谱的写入规则。
+
+### 插件构建机制
+
+插件不是一个把内容直接塞进现有页面的脚本，而是一个应用生成流水线：
+
+```text
+TaskProfile
+    ↓
+宿主 LLM 生成 MVP
+    ↓ 用户确认方向
+宿主 LLM 生成完整 KnowledgeNetwork
+    ↓
+validateProfile + validateKnowledgeDataset
+    ↓
+create-app 复制模板并激活 Profile
+    ↓
+inject 生成 runtime/knowledge-state.json
+    ↓
+独立应用安装、测试、构建和运行
+```
+
+`plugin/discovery.mjs` 提供机器可读的能力描述，`scripts/knowmap.mjs` 提供校验和注入入口，`scripts/create-app.mjs` 负责从 `templates/app/` 生成独立应用。构建期产物必须位于项目根目录之外的全新目录，且构建阶段不读取项目中已有的模型密钥。
+
+### 存储与部署
+
+默认模式面向本地优先使用：初始知识来自源码，运行时状态写入应用的 `data/runtime/knowledge-state.json`，不依赖数据库和外部服务。需要多人访问、长期运行或后台任务时，可以启用 PostgreSQL 保存运行时状态和任务数据，使用 Drizzle 迁移管理表结构，并通过 Redis/Worker 执行长时间 Agent 任务；资料文件则可以接入 S3 兼容对象存储。
+
+这几种基础设施是运行时适配器，不改变上层的 `KnowledgeDataset`、Agent 契约和确认流程。因此同一个主题应用可以先以本地模式验证，再按部署需要迁移到数据库、队列和对象存储环境。
+
+### API 入口
+
+应用运行层的主要接口包括：
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /api/knowledge` | 读取当前知识图谱和运行时数据 |
+| `POST /api/agent/chat` | 围绕当前节点进行问答 |
+| `POST /api/agent/jobs` | 创建 Agent、总结或资料处理任务 |
+| `GET /api/agent/jobs/:id` | 查询后台任务状态和结果 |
+| `POST /api/knowledge/ingest` | 接入文本、对话、文档或论文内容 |
+| `POST /api/agent/confirm` | 用户确认后提交受控 GraphPatch |
+| `POST /api/knowledge/savepoint` | 创建或管理知识版本保存点 |
+| `GET/POST /api/llm/config` | 读取或保存应用的模型配置 |
+
+插件构建接口和应用运行接口是两套边界：前者生成 Profile 与初始知识网络，后者只在已经创建的应用内使用和扩展知识。
+
 ## 当前能力
 
 | 层 | 能力 | 状态 |
@@ -236,4 +355,3 @@ npm.cmd run plugin:discover # 查看插件能力描述
 - [插件审查计划](docs/plugin-audit-plan.md)
 - [插件审查结果](docs/plugin-audit-results.md)
 - [平台托管导出说明](EXPORT_README.md)
-

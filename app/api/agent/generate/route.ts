@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
     // 使用统一的 LlmProvider（自动处理推理模型兼容、tool_choice 剥离等）
     const provider = createConfiguredLlmProvider({ environment: runtimeLlmConfigStore().environment() });
     const generator = new KnowledgeGenerator(provider, topic, profile, mode);
-    const result = await generator.generate({ initialNetwork, confirmedMvp: mode === "full" ? true : Boolean(confirmedMvp), signal: request.signal });
+    const result = await generator.generate({ initialNetwork, confirmedMvp: mode === "full" ? true : Boolean(confirmedMvp), mvpAcceptanceToken: mode === "full" ? mvpConfirmationToken : undefined, signal: request.signal });
 
     let filePath: string | undefined;
     if (writeToFile) {

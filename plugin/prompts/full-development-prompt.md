@@ -1,6 +1,6 @@
 # 完整开发提示词
 
-输入：已确认 {{profile_json}} 与 {{mvp_network}}、主题 {{topic}}、来源 {{references}}。
+输入：已确认 {{profile_json}} 与 {{mvp_network}}、主题 {{topic}}、来源 {{references}}。调用完整生成前必须同时持有与 `profileId + mvp_network` 匹配的 `mvpAcceptanceToken`；没有令牌就停止并请求用户验收 MVP。
 
 在原网络上继续研究，保留确认过的根、域和节点身份。逐节点观察缺口、检索、提出有证据的候选、再观察覆盖度。各节点轮次独立；稀疏部分多研究、已有充分内容少重复。多个缺口分批处理，统一合并时解析重复名称、临时 ID 和跨批父级。
 

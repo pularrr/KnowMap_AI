@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withProjectModules } from "../scripts/lib/project-modules.mjs";
@@ -18,6 +18,24 @@ test("discovery exposes an executable host-neutral contract", () => {
 
 test("build-time provider actions are rejected before reading project configuration", async () => {
   await assert.rejects(runKnowmap({ action:"full", input:"missing.json", output:"missing-output.json" }), /禁止调用项目内已配置/);
+});
+
+test("full validation requires explicit MVP acceptance", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "knowmap-mvp-gate-"));
+  try {
+    const input = join(directory, "full.json"), output = join(directory, "validation.json");
+    writeFileSync(input, JSON.stringify({ phase: "full", profile: {}, network: {} }));
+    await assert.rejects(runKnowmap({ action: "validate", input, output }), /先完成并验收 MVP/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("generated app template derives the title and browser storage keys from APP_CONFIG", () => {
+  const page = readFileSync(join(process.cwd(), "templates", "app", "app", "page.tsx"), "utf8");
+  const canvas = readFileSync(join(process.cwd(), "templates", "app", "features", "knowledge-graph", "components", "KnowledgeGraphCanvas.tsx"), "utf8");
+  assert.match(page, /APP_CONFIG\.appName/);
+  assert.doesNotMatch(page, /<h1>FMCW/);
+  assert.match(page, /APP_CONFIG\.storagePrefix/);
+  assert.doesNotMatch(canvas, /aria-label="渐进披露式 FMCW/);
 });
 
 test("generated applications cannot be placed inside the KnowMap skill project", async () => {

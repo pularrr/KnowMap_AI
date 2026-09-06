@@ -8,7 +8,7 @@ import { datasetToAgentGraph } from "../../core/knowledge/portable-bundle";
 import { validateKnowledgeDataset } from "../../core/knowledge/validation";
 import { validateProfile } from "../profile/validate-profile";
 import { collectAdaptiveResearch, type ResearchStats } from "./adaptive-research";
-import { issueMvpToken } from "./mvp-confirmation";
+import { issueMvpToken, verifyMvpToken } from "./mvp-confirmation";
 import { operationsFromResearch } from "./research-build";
 import { networkToDataset, datasetToNetwork, type KnowledgeNetwork } from "./network-dataset";
 export type { KnowledgeNetwork } from "./network-dataset";
@@ -38,10 +38,10 @@ export class KnowledgeGenerator {
         type: "PART_OF", rationale: `${d.name} 是 ${root.name} 的一个语义域` })) : [] };
   }
 
-  async generate(options: { initialNetwork?: KnowledgeNetwork; confirmedMvp?: boolean; signal?: AbortSignal;
+  async generate(options: { initialNetwork?: KnowledgeNetwork; confirmedMvp?: boolean; mvpAcceptanceToken?: string; signal?: AbortSignal;
     onProgress?: (message: string) => void } = {}): Promise<GenerationResult> {
-    if (this.mode === "full" && (!options.initialNetwork || options.confirmedMvp !== true)) {
-      throw new Error("完整开发需要用户确认过的 initialNetwork 和 confirmedMvp=true");
+    if (this.mode === "full" && (!options.initialNetwork || options.confirmedMvp !== true || !options.mvpAcceptanceToken || !verifyMvpToken(options.mvpAcceptanceToken, this.profile.id, options.initialNetwork))) {
+      throw new Error("完整开发需要用户确认过的 initialNetwork 和有效的 mvpAcceptanceToken；请先完成 MVP 验收");
     }
     const warnings: string[] = [];
     const report = (message: string) => { warnings.push(message); options.onProgress?.(message); };

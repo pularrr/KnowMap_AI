@@ -27,6 +27,9 @@ export async function runKnowmap({ action, input, output }) {
     const { networkToDataset } = await load("/server/agent/network-dataset.ts");
     const { validateKnowledgeDataset } = await load("/core/knowledge/validation.ts");
     if (action === "validate" || action === "inject") {
+      if ((request.phase === "full" || request.mode === "full") && request.confirmedMvp !== true && request.mvpConfirmation?.confirmed !== true) {
+        throw new Error("完整网络必须包含 confirmedMvp=true 或 mvpConfirmation.confirmed=true；请先完成并验收 MVP");
+      }
       const profile = validateProfile(request.profile);
       const dataset = networkToDataset(request.network, profile);
       const report = validateKnowledgeDataset(dataset, { profile });

@@ -42,7 +42,7 @@ metadata:
 
 生成 MVP 或完整网络前必须读取 [先总后分的层级构造法](references/hierarchy-construction.md)。Profile 启用 hierarchy 时先生成导航中间层并完成宽度审查，再生成具体节点和卡片；CodeGraph 等任务使用 Profile 声明的仓库导航层级，禁止把“一个节点一个概念”解释为把所有细概念直接平铺在域下。
 
-MVP 未确认时停在展示阶段；用户已经确认则继续，不重复索要确认。调整域、根或主题范围后重新展示 MVP。confirmedMvp 是宿主传递的用户确认标记，不是自动生成的审批证据。
+MVP 未确认时必须停在展示阶段；必须明确询问用户是否验收当前 MVP。只有用户明确验收后，宿主才可设置 `confirmedMvp: true` 或 `mvpConfirmation.confirmed: true` 并生成完整网络。调整域、根或主题范围后原确认失效，必须重新展示并重新验收 MVP。`confirmedMvp` 是宿主传递的用户确认标记，不是模型推断值或自动生成的审批证据。
 
 ## 质量与预算
 
