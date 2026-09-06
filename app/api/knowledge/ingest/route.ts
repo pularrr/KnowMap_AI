@@ -65,7 +65,7 @@ export async function POST(request: Request) {
     if (runtimeLlmConfigStore().status().configured) {
       try {
         const provider = createConfiguredLlmProvider({ environment: runtimeLlmConfigStore().environment() });
-        matches = await matchClaimsToGraph(provider, (await import("../../../../server/runtime/app-runtime")).runtimeKnowledgeRepository().snapshot(), staged, body.nodeId);
+        matches = await matchClaimsToGraph(provider, await (await import("../../../../server/runtime/app-runtime")).activeKnowledgeRepository().then(repository => repository.snapshot()), staged, body.nodeId);
       } catch {
         // Fail-open: keep the staged heuristic matches.
       }

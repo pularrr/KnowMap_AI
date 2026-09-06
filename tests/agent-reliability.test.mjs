@@ -21,26 +21,26 @@ const budgets = await vite.ssrLoadModule("/server/agent/research-budget.ts");
 const stores = await vite.ssrLoadModule("/server/agent/job-store.ts");
 const response = (text) => ({id:"mock",provider:"test",model:"test",status:"completed",text,toolCalls:[],session:{previousResponseId:"mock"}});
 
-test("job storage separates metadata from full text and reads UTF-8 chunks without truncation", () => {
+test("job storage separates metadata from full text and reads UTF-8 chunks without truncation", async () => {
   const directory = mkdtempSync(join(tmpdir(), "knowmap-jobs-"));
   try {
     const store = new stores.FileJobStore(directory);
     const text = "第一行\n🚗雷达知识\n".repeat(8000);
     const job = { id:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", sessionId:"session-a", nodeId:"root", kind:"deep-search", query:"研究", state:"completed", createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), textBytes:0, textChecksum:"", revision:1 };
-    store.save(job, text);
+    await store.save(job, text);
     assert.equal(readFileSync(join(directory, job.id + ".json"), "utf8").includes("第一行"), false);
-    assert.equal("text" in store.list("session-a")[0], false);
+    assert.equal("text" in (await store.list("session-a"))[0], false);
     let cursor = 0; let restored = ""; let chunks = 0; let checksum = "";
     do {
-      const part = store.readText(job.id, "session-a", cursor, 4097);
+      const part = await store.readText(job.id, "session-a", cursor, 4097);
       restored += part.text; chunks += 1; checksum = part.checksum;
       if (part.nextCursor === null) break;
       cursor = part.nextCursor;
     } while (true);
     assert.ok(chunks > 1);
     assert.equal(restored, text);
-    assert.equal(checksum, store.load(job.id).job.textChecksum);
-    assert.throws(() => store.readText(job.id, "session-b", 0, 4096), /不存在/);
+    assert.equal(checksum, (await store.load(job.id)).job.textChecksum);
+    await assert.rejects(store.readText(job.id, "session-b", 0, 4096), /不存在/);
   } finally { rmSync(directory, { recursive:true, force:true }); }
 });
 

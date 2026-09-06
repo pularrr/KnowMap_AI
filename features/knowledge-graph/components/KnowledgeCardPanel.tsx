@@ -97,7 +97,7 @@ export function KnowledgeCardPanel({ selectedId, onReveal, dataset = expandedKno
           {pending ? <p className="edit-preview">将更新 {pending.projectionDiff.cards.updated.length + pending.projectionDiff.cards.added.length} 张卡片；确认前不会写入。</p> : null}
           {saveError ? <p className="form-error">{saveError}</p> : null}
         </div>
-      ) : <p className="detail-summary"><strong>{selected.title}</strong>：{selected.summary}</p>}
+      ) : <p className="detail-summary"><strong>{selected.title}</strong>：{selected.summary.slice(0, 12)}</p>}
 
       {!editing ? <>
         <div className="knowledge-card-tabs" role="tablist" aria-label="知识卡片分类">{([ ["theory", "理论知识"], ["application", "应用知识"], ["other", "其他知识"], ["history", "历史修改"] ] as const).map(([id, label]) => <button key={id} role="tab" aria-selected={activePage === id} className={activePage === id ? "active" : ""} onClick={() => setActivePage(id)}>{label}</button>)}</div>

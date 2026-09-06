@@ -1,145 +1,239 @@
-> 2026-09-05 插件审查与实现：[结果报告](docs/plugin-audit-results.md) · [执行入口](plugin/SKILL.md)。以下内容保留原项目说明，最新插件能力与限制以结果报告为准。
+# KnowMap · AI 原生知识图谱应用构建框架
 
-# FMCW Radar Knowledge Graph · AI 知识图谱生长引擎
+KnowMap 是一个面向主题知识网络的 AI 原生应用框架。它的核心交付物不是插件本身，而是由插件构建出来的、可独立运行的知识图谱应用：用户输入一个主题，宿主 LLM 设计知识结构并生成知识网络，框架完成确定性校验、脚手架和数据注入，最终得到一个可以浏览、问答、研究和受控扩展的独立应用。
 
-一个**图谱原生的 AI 应用**：内置一套"治理型 Agent 管道"，让插入式的通用 LLM（GPT / DeepSeek / 本地模型均可）一接入就获得**可审计、可回滚、需用户确认**的知识图谱生长能力——读图 → 判缺口 → 提案 → 结构审查 → 确定性构建 → 用户确认 → 版本化落库。
+当前内置主题是 **FMCW 雷达知识图谱**，覆盖检测、估计、关联、跟踪、系统实现和 AI 学习等知识域。框架也支持通过 Profile 构建激光雷达、代码知识图谱等其他主题应用。
 
-当前版本 v0.1.0：**认知层的离线实现完整可用**（无任何 API Key 也能浏览、问答、缺口分析），LLM 接入契约已就绪。开发路线以在线 LLM 交互为亮点推进（见[开发计划](#-后续开发计划))。
+> 重要定位：项目是“两层应用结构”——插件构建层负责创建应用；应用运行层负责在已创建的应用内使用知识图谱。插件是构建背景，主要使用对象是插件交付出的独立应用。
 
-> 领域背景：FMCW 雷达信号处理与数据关联知识图谱（检测/估计/关联/跟踪/系统实现/AI 学习等 11 个语义域），所有内容可独立离线运行。
+## 30 秒理解两层结构
 
----
-
-## ✨ 核心理念：内生 AI
-
-- **认知与治理分离**：通用 LLM 只参与需要判断的地方——候选生成、缺口识别、语义归类、内容审查；确定性的环节——结构门禁、GraphPatch 构建、状态机、版本仓、审计——由代码实现。
-- **写路径：LLM 接口回文本与结构化声明；声明要落地必须经过 结构审查 → 确定性补丁 → **用户确认** 四道闸。
-- **离线是 L0，不是产品形态**：离线实现是"安全地板 + 测试基座 + 降级路径"；产品的亮点在 LLM 介入后的一等公民体验（对话式生长、矛盾发现、缺口提案）。
-
----
-
-## 🚀 当前版本能力（v0.1.0）
-
-| 层 | 能力 | 状态 |
-|---|---|---|
-| 图谱本体 | 114 节点（98 历史零损迁移 + 16 种子扩展）/ 11 语义域 / 5 视觉分支 / 25 条语义边 / 21 条 LaTeX 公式（KaTeX 渲染） | ✅ 已实现 |
-| 知识模型 | 节点只表实体身份；12 类语义边（相似/替代/依赖/输入输出/实现/影响/验证…）；13 类卡片栏目（定义/原理/假设/工程取舍/失效模式/验证/对比/误区…） | ✅ 已实现 |
-| 治理层 | 宪法式校验器（层级/环/边权/证据约束）、同层优先有界遍历、四 Agent 契约、GraphPatch、一次性确认凭据、幂等提交、追加式回滚、审计重放、版本仓（1 最近 + 2 历史） | ✅ 已实现（31 项测试全绿） |
-| 认知层（离线） | 当前节点问答（本地词频 + 卡片来源）、13 维知识缺口深度搜索（有界邻域候选，只读待审查）、对话总结 | ✅ 已实现 |
-| 认知层（LLM） | `GeneralLlmProvider` 中立端口、能力白名单、摄取/提案/审查契约 | 📐 契约就绪，实现见开发计划 |
-| UI | 导航树 + SVG 图谱 + 四页签知识卡 + Agent 面板（提问/深度搜索/总结），URL `?node=` 直达 | ✅ 已实现 |
-
-## 🖥️ 使用方法
-
-### 前置条件
-- Node.js **≥ 22.13**（Windows 下命令统一用 `npm.cmd`）
-- 无需任何 API Key、数据库、网络
-
-### 运行
-
-```powershell
-npm.cmd ci          # 按锁文件安装依赖
-npm.cmd run dev     # 开发服务器 → http://localhost:3000
+```text
+用户主题
+   ↓
+插件构建层：宿主 LLM + Profile + 知识网络 + 校验/脚手架/注入
+   ↓
+插件构建的独立知识图谱应用
+   ↓
+应用运行层：图谱浏览 + AI 问答 + 深度研究 + 资料接入 + 用户确认后更新
 ```
 
-生产构建与启动（同样完全本地）：
+### 第一层：插件结构与构建层
+
+插件位于 `plugin/`，提供任务 Profile、构建契约、工作流说明、提示词模板和发现入口。宿主 LLM 根据用户主题直接编写 `Profile`、MVP 和完整 `network` JSON；项目脚本负责校验、创建应用、注入已审查的数据，并不会在构建阶段调用项目中配置的 Provider。
+
+这一层的产物是一个新的应用目录，包括主题配置、知识数据、共享运行时、UI、API 和验收所需的工程文件。产物必须写入项目根目录之外的全新隔离目录，避免覆盖源项目和其他任务。
+
+### 第二层：插件构建出的应用运行层
+
+独立应用加载已注入的知识网络，通过统一运行时提供：
+
+- 导航树、图谱画布和知识卡片；
+- 当前节点问答、对话总结和知识缺口深度搜索；
+- 文档、论文、对话或其他资料的知识接入；
+- 候选节点、关系和卡片的审查、预览、用户确认与版本化写入；
+- 历史版本、保存点、回滚和审计记录。
+
+运行层可以接入用户自行配置的 LLM，也可以先使用本地确定性能力。模型只能提供回答、抽取或候选声明，不能直接访问仓库或绕过结构校验写入图谱。
+
+## 核心理念：AI 原生，但由图谱约束 AI
+
+- **图谱是应用的中心**：AI 围绕当前节点、邻域、卡片栏目和关系工作，而不是把知识图谱当作普通聊天的附属展示。
+- **认知与治理分离**：LLM 负责理解、归类、候选生成和缺口判断；结构校验、GraphPatch、状态机、版本仓和审计由确定性代码负责。
+- **所有写入都可审查**：模型输出先成为待审查声明，再经过校验、差异预览和一次性确认，最后以新版本追加写入。
+- **离线能力是安全底座**：没有 API Key 时仍可浏览图谱、查看卡片、进行本地问答和缺口分析；联网模型是增强能力，不是数据安全的前提。
+
+## 当前能力
+
+| 层 | 能力 | 状态 |
+| --- | --- | --- |
+| 插件构建层 | Profile 校验、MVP/完整网络工作流、网络校验、应用脚手架、运行时数据注入 | ✅ 可用 |
+| 知识模型 | 节点、语义关系、卡片栏目、公式、证据与主题 Profile | ✅ 可用 |
+| 应用运行层 | 知识树、图谱画布、知识卡、公式渲染、历史记录 | ✅ 可用 |
+| 本地 AI 能力 | 当前节点问答、对话总结、13 类知识缺口深度搜索 | ✅ 可用 |
+| 受控知识生长 | 提案、结构审查、确定性补丁、确认、版本化写入、回滚与审计 | ✅ 可用 |
+| 外部 LLM | OpenAI-compatible Provider、模型测试与应用内配置 | 🔧 按应用配置 |
+
+## 快速开始：先运行内置 FMCW 应用
+
+### 环境要求
+
+- Node.js **≥ 22.13.0**
+- Windows 建议使用 `npm.cmd`
+- 无需 API Key、数据库或外部服务即可运行基础功能
+
+### 安装、验证与启动
+
+```powershell
+npm.cmd ci
+npm.cmd run type-check
+npm.cmd test
+npm.cmd run dev
+```
+
+打开 `http://localhost:3000`。生产构建与启动：
 
 ```powershell
 npm.cmd run build
 npm.cmd run start
 ```
 
-验证（31 项测试覆盖模型/遍历/UI 契约/Agent 安全链路）：
+### 应用内使用方法
+
+1. 在左侧知识域树或中间图谱中选择节点。
+2. 在右侧知识卡查看理论知识、应用知识、其他知识和历史修改。
+3. 在 Agent 面板围绕当前节点提问，或执行“深度搜索”查看缺失栏目和邻域候选。
+4. 粘贴文档、论文、对话或知识摘要，选择资料类型后进行整理和接入。
+5. 对候选知识查看差异、审查结果和证据；只有用户确认后才会写入新版本。
+6. 使用历史修改、保存点和回滚检查知识变化。
+
+未配置真实 LLM 时，Agent 使用本地确定性实现；候选结果只读展示，不会假装是联网检索。配置 LLM 后，打开应用中的模型设置，填写 OpenAI-compatible Base URL、模型名和 API Key。密钥由用户在独立应用中自行配置，不写入 Profile、脚手架或插件任务文件。
+
+## 使用插件构建新的主题应用
+
+插件构建的是独立应用，不是对当前 FMCW 应用的直接改写。建议将所有中间产物放在项目根目录外，例如 `D:\\knowmap-tasks\\lidar-2026\\`。
+
+### 1. 查看插件能力
 
 ```powershell
+npm.cmd install
+node scripts/knowmap.mjs discover
+```
+
+也可以在宿主环境导入 `plugin/discovery.mjs` 的 `discoverKnowmap()`，将返回的工具描述注册到宿主 LLM；工具执行映射到 `scripts/knowmap.mjs` 的 `runKnowmap()`。
+
+### 2. 设计并校验 Profile
+
+Profile 描述应用名称、根节点、知识域、节点类型、关系类型、卡片栏目、层级规则和提示词。它是主题应用的边界，不是 FMCW 内容的复制品。
+
+```powershell
+node scripts/knowmap.mjs validate-profile `
+  --input D:\\knowmap-tasks\\lidar-2026\\profile.json `
+  --output D:\\knowmap-tasks\\lidar-2026\\profile.validated.json
+```
+
+构建阶段由宿主 LLM 直接生成 JSON；不要调用项目已配置的 DeepSeek 或其他付费 Provider。构建前请阅读 [插件执行说明](plugin/SKILL.md) 和 [层级构造法](plugin/references/hierarchy-construction.md)。
+
+### 3. 生成 MVP，确认方向，再生成完整网络
+
+MVP 用于先确认主题边界、域树、根节点、少量节点和示例卡片；用户确认后再继续完整网络。完整网络应包含 `nodes`、`cardBlocks`、`relations`，可按需要附带 `evidence`。
+
+这一步由宿主 LLM 编写结构化文件，项目脚本负责后续确定性验证。不要用固定节点数量凑内容，也不要把所有细概念平铺在一个域下。
+
+### 4. 审查网络
+
+```powershell
+node scripts/knowmap.mjs validate `
+  --input D:\\knowmap-tasks\\lidar-2026\\reviewed-input.json `
+  --output D:\\knowmap-tasks\\lidar-2026\\validation-report.json
+```
+
+校验会检查 Profile 引用、节点层级、关系端点、卡片栏目、环、孤立结构、名称和摘要等问题。warning 也需要由宿主 LLM 或用户逐项判断，不能把“校验通过”理解为内容已经完成语义审查。
+
+### 5. 创建独立应用
+
+```powershell
+node scripts/create-app.mjs `
+  --profile-file D:\\knowmap-tasks\\lidar-2026\\profile.json `
+  --name lidar-knowledge-map `
+  --output D:\\knowmap-tasks\\lidar-2026\\app
+```
+
+脚手架会复制应用模板、共享引擎、运行时、插件契约和 API，写入 `profiles/active.json`，并根据 Profile 生成应用配置。输出目录必须不存在且位于本项目根目录之外。
+
+### 6. 注入已审查知识网络
+
+```powershell
+node scripts/knowmap.mjs inject `
+  --input D:\\knowmap-tasks\\lidar-2026\\reviewed-input.json `
+  --output D:\\knowmap-tasks\\lidar-2026\\app
+```
+
+注入会生成 `app/data/runtime/knowledge-state.json`，同时进行数据往返检查和 checksum 保护。注入是构建阶段的初始数据交付，不用于覆盖已有应用运行时状态。
+
+### 7. 在独立应用中验收
+
+```powershell
+Set-Location D:\\knowmap-tasks\\lidar-2026\\app
+npm.cmd install
+npm.cmd run type-check
 npm.cmd test
+npm.cmd run build
+npm.cmd run dev
 ```
 
-### 界面导览
-- **左侧**导航树与**中间** SVG 图谱共享同一父层级；点击节点，右侧打开知识卡。
-- **右侧知识卡**四个页签：理论知识 / 应用知识 / 其他知识 / 历史修改（每节点最近 15 条）。
-- **底部 Agent 面板**（当前节点优先）：提问 → 基于当前节点卡片作答并标注来源；深度搜索 → 检查 13 类卡片维度缺口并给出有界邻域候选（只读、不落库）；总结 → 汇总结论供后续知识检索。
-- 历史记录存于浏览器 localStorage（`fmcw-knowledge-history-v1`），服务端零持久化。
+验收重点是：主题 Profile 是否生效、根节点和域树是否正确、卡片栏目是否适用、图谱和公式是否正常、问答是否围绕当前节点、资料入口是否可用，以及写入前是否始终需要用户确认。
 
-### 当前边界（如实说明）
-- 未接入任何真实 LLM：Agent 面板为本地确定性实现，候选只读展示、不写入图谱，UI 不伪装成联网检索。
-- 写路径（提案→确认→版本）的完整安全链路**已实现并经测试验证**，但 UI 写入入口随 LLM 接入一并开放（见开发计划 P1.3 第 5 步）。
-- 单用户本地应用，无鉴权设计；图谱数据编译在源码中，运行期不落盘。
+## 应用运行层的 AI 工作流
 
----
-
-## 🏗️ 架构速览（AI 应用视角）
-
-```
-core/knowledge/    知识模型：schema（节点/12 边/13 卡/公式）、validation 宪法、traversal 同层优先有界遍历
-core/agent/        Agent 契约与能力边界：Knowledge/Review/Build/Development 接口 + capabilityPolicy
-server/agent/      离线工作流：审查门禁 → dry-run → 确认凭据 → revision+1 → 审计重放；版本仓
-features/agent/    Agent 面板 UI + 离线认知实现（问答/深度搜索/总结）
-data/              仓库接口 + 静态实现；98 节点零损迁移 + 16 节点种子切片
-app/               页面组装 + P0.4 原始基线（SVG）
+```text
+当前节点 / 邻域 / 卡片 / 用户资料
+                  ↓
+             Context Builder
+                  ↓
+             LLM 或本地 Agent
+                  ↓
+      回答 / 摘取声明 / 研究候选
+                  ↓
+          Profile + Schema 校验
+                  ↓
+        Review → Build → 差异预览
+                  ↓
+              用户确认
+                  ↓
+          新 revision + 审计事件
 ```
 
-**内置 Agent 在目标架构中的角色**：
+应用内的 `/api/agent/chat`、`/api/agent/jobs` 和 `/api/knowledge/ingest` 等接口服务于运行层；插件的 `design`、`mvp`、`full`、`validate`、`inject` 和 `create-app` 流程服务于构建层。两层共用数据契约和 `validateKnowledgeDataset`，但职责、执行者和数据生命周期不同。
 
-| Agent | 职责 | 设计归属 |
-|---|---|---|
-| Knowledge | 候选知识/关系/卡片生成，缺口识别 | 🧠 认知层 → LLM 判断点（离线为规则实现） |
-| Review | 结构安全审查（层级/环/证据/悬空引用） | ⚖️ 治理层：确定性门禁；语义二审为可选 LLM 扩展 |
-| Build | 生成确定性 GraphPatch + 差异预览 | ⚖️ 治理层：纯函数（同提案必同 patch id） |
-| Development | 编排：预览 → 用户 confirm/revise/reject → 版本 | ⚖️ 治理层：状态机 |
+## 安全边界与数据说明
 
-**写路径铁律**（无论离线在线）：模型只能回答与抽取 → 抽取物为"待审查声明" → 经 Review 结构门禁 → Build 确定性 dry-run → 用户确认（一次性 nonce）→ 追加新 revision，永不改写历史；全程审计可重放。
+- 构建层不读取或测试项目中已有的 Provider Key。
+- API Key 只能由用户在独立应用的设置中配置，不进入 Profile、网络 JSON、脚手架或提交记录。
+- LLM 输出只能作为文本或结构化声明进入应用，不能直接调用仓库写入方法。
+- 确定性校验不会被语义模型绕过；用户确认是受控写入的最后一道门。
+- 运行时知识状态默认保存在应用的本地运行时目录；使用数据库迁移部署时，数据边界以对应部署配置为准。
+- 任何 AI 回答、节点摘要、关系和资料归类都应由用户复核。
 
-## 🔌 LLM 接入契约（面向开发者）
+## 项目目录
 
-- `core/agent/provider-boundary.ts`：`GeneralLlmProvider.respond(request)` 是模型唯一端口——入参为纯文本上下文，出参仅 `{ text, extractedKnowledge? }`；`AgentOrchestrator.handle()` 按意图（回答 / 总结供图 / 提案更新）路由。模型侧**不存在任何仓库或变更方法**。
-- `core/agent/contracts.ts`：六类 Agent 接口 + 提案/审查/补丁/审计事件结构；`capabilityPolicy` 白名单保证 general-llm 仅具 `answer`、`extract-claims`。
-- `core/ingestion/contracts.ts`：多源输入（对话/论文/文档/媒体）→ 片段 → 声明 → 匹配候选（追加卡片/建节点/建关系/需人工复核）的结构化通道。
-
-## 🗺️ 后续开发计划
-
-### P1.3 · AI 原生化（当前推进中）
-1. 卡片栏目元数据表：13 栏目从短标签升级为 `{定义, 判定特征, 正反例}`（few-shot 分类标准），统一 `recommendedBlocks` 与 UI 归类的重复定义；
-2. `systemContext` 组装器：当前节点卡片 + 邻域 + 栏目元数据 + 写入规则 → 组装进模型上下文（落地"枚举进上下文"而非"锁死在类型"）；
-3. 真实 LLM Provider：实现 `GeneralLlmProvider`（OpenAI 兼容端点 / 本地推理均可），先开放 `answer`/`summarize-for-graph`（零写风险）；
-4. 结构化输出解析层：模型 JSON → schema 校验 → 枚举白名单 → 失败重试/降级待审；
-5. 打通图谱生长闭环：`propose-graph-update` → 复用现有 Review→Build→确认流水线，UI 复用现成的"待审查候选"消息契约；
-6. 纠偏回路：Review 门禁 findings 回灌 revise 上下文，让模型在运行时学习项目约束。
-
-### P1.4 · 在线一等公民体验（亮点）
-- 图谱对答带溯源：答案逐句锚定卡片/公式，可点回图；
-- 矛盾发现：新声明与既有卡片冲突时主动提示，建议以"误区卡片 + 证据"形式收编；
-- 主动缺口提案：Agent 巡查节点覆盖度，起草缺失栏目请你审；
-- 对话式多源收编：贴论文/URL → 抽取 → 匹配 → 对话确认（"这条要建边吗？"）；
-- 可选语义二审：Review 在结构门禁之上增加 LLM 编委会复核（不跳过、不降级确定性门禁）。
-
-## 🧪 测试与验证
-
-31 项自动化测试（`npm run test`）：98 节点零损往返、领域与层级校验、同层优先遍历的确定性/去重/环安全、可见图三列投影、公式与 UI 契约、四 Agent 确认前零写入/幂等/伪造拒绝/回滚追加修订/审计重放、深度搜索锚定覆盖与只读候选。
-
-## 🧰 技术栈
-
-Next.js 16 + React 19 + Tailwind 4 + KaTeX + zod + TypeScript 5.9（测试：Node 原生 test runner + Vite）。Drizzle/Vinext/Cloudflare 相关命令与代码为历史兼容残留，默认走标准 Next.js 路径，不依赖任何外部服务。
-
-## 📂 目录速览
-
-```
-app/                 页面入口 + P0.4 原始基线（知识数据/SVG）
-core/knowledge/      知识模型 schema、校验宪法、遍历算法、便携包
-core/agent/          Agent 契约、能力边界、图操作、离线实现
-core/ingestion/      多源输入 → 声明 → 匹配候选
-server/agent/        离线工作流、版本仓、审计重放
-server/knowledge/    磁盘版版本化知识仓
-data/knowledge/      98 节点零损迁移、种子扩展切片、语义域定义
-data/repositories/   仓库接口 + 离线静态实现
-features/knowledge-graph/  树、SVG 图谱、知识卡、公式渲染
-features/agent/      Agent 面板 + 离线认知实现
-tests/               31 项契约与安全测试
-docs/                架构与开发计划文档
+```text
+plugin/                    插件构建说明、契约、工作流、提示词和发现入口
+scripts/                   构建、校验、脚手架和注入命令
+templates/app/             独立知识图谱应用模板
+profiles/                  主题 Profile；当前包含 FMCW Radar
+core/knowledge/            知识模型、校验、遍历、便携数据包
+core/ingestion/            多源资料 → 片段 → 声明 → 匹配候选
+server/profile/            Profile 加载与确定性校验
+server/agent/              Agent、研究、任务队列和知识写入工作流
+server/runtime/            运行时知识仓、本地状态和数据库适配
+data/knowledge/            内置主题知识数据和初始数据
+features/knowledge-graph/  知识树、图谱画布、知识卡和公式组件
+features/agent/            Agent 面板和本地认知实现
+app/api/                   Profile、Agent、知识和 LLM 配置接口
+tests/                     UI、模型、插件工作流和 Agent 安全测试
+docs/                      架构、迁移、开发计划和审查报告
 ```
 
-## 📄 文档
+## 常用命令
 
-- `docs/ARCHITECTURE_PLAN.md` — 架构与四 Agent 工作流
-- `docs/DEVELOPMENT_PLAN_P1_2.md` — P1.2 产品口径与边界
-- `EXPORT_README.md` — 平台托管导出说明
+```powershell
+npm.cmd run dev             # 启动开发应用
+npm.cmd run build           # 构建应用
+npm.cmd run type-check      # TypeScript 类型检查
+npm.cmd test                # 运行项目测试
+npm.cmd run lint            # ESLint 检查
+npm.cmd run plugin:discover # 查看插件能力描述
+```
+
+## 相关文档
+
+- [插件执行说明](plugin/SKILL.md)
+- [插件 README](plugin/README.md)
+- [层级构造法](plugin/references/hierarchy-construction.md)
+- [架构规划](docs/ARCHITECTURE_PLAN.md)
+- [AI 应用重构计划](docs/AI_APPLICATION_REFACTOR_PLAN.md)
+- [插件审查计划](docs/plugin-audit-plan.md)
+- [插件审查结果](docs/plugin-audit-results.md)
+- [平台托管导出说明](EXPORT_README.md)
+

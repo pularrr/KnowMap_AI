@@ -5,11 +5,13 @@ import { expandedKnowledgeDataset } from "../../data/knowledge/initial-dataset";
 import { RuntimeLlmConfigStore } from "../config/runtime-llm-config";
 import { ConfirmationTokenService } from "../security/confirmation-token";
 import { RuntimeKnowledgeRepository } from "./runtime-repository";
+import { PostgresRuntimeKnowledgeRepository } from "./postgres-runtime-repository";
 
 const runtimeDirectory = join(process.cwd(), "data", "runtime");
 
 const globalRuntime = globalThis as typeof globalThis & {
   __fmcwKnowledgeRepository?: RuntimeKnowledgeRepository;
+  __fmcwPostgresKnowledgeRepository?: PostgresRuntimeKnowledgeRepository;
   __fmcwLlmConfigStore?: RuntimeLlmConfigStore;
   __fmcwConfirmationTokens?: ConfirmationTokenService;
 };
@@ -20,6 +22,18 @@ export function runtimeKnowledgeRepository(): RuntimeKnowledgeRepository {
     expandedKnowledgeDataset,
   );
   return globalRuntime.__fmcwKnowledgeRepository;
+}
+
+/** Explicit async entry point for the migration path; existing JSON callers remain unchanged. */
+export function postgresRuntimeKnowledgeRepository(): PostgresRuntimeKnowledgeRepository {
+  if (process.env.RUNTIME_STORE !== "postgres") throw new Error("Set RUNTIME_STORE=postgres to use the PostgreSQL repository.");
+  globalRuntime.__fmcwPostgresKnowledgeRepository ??= new PostgresRuntimeKnowledgeRepository(expandedKnowledgeDataset);
+  return globalRuntime.__fmcwPostgresKnowledgeRepository;
+}
+
+export async function activeKnowledgeRepository(): Promise<RuntimeKnowledgeRepository | PostgresRuntimeKnowledgeRepository> {
+  if (process.env.RUNTIME_STORE === "postgres") return postgresRuntimeKnowledgeRepository();
+  return runtimeKnowledgeRepository();
 }
 
 export function runtimeLlmConfigStore(): RuntimeLlmConfigStore {

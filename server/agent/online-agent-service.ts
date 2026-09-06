@@ -29,7 +29,7 @@ import { datasetToAgentGraph } from "../../core/knowledge/portable-bundle";
 import type { JsonObject, LlmProvider } from "../../core/llm/contracts";
 import type { StagedKnowledgeImport } from "../../core/ingestion/contracts";
 import { createConfiguredLlmProvider } from "../llm/provider-factory";
-import { confirmationTokenService, runtimeKnowledgeRepository, runtimeLlmConfigStore } from "../runtime/app-runtime";
+import { activeKnowledgeRepository, confirmationTokenService, runtimeLlmConfigStore } from "../runtime/app-runtime";
 import { executeKnowledgeTool, type KnowledgeToolObservation } from "./knowledge-tools";
 
 const now = () => new Date().toISOString();
@@ -128,8 +128,8 @@ export class OnlineAgentService {
   private readonly buildAgent = new OfflineBuildAgent();
 
   async prepareReference(sessionId:string):Promise<AgentInteractionResult> {
-    const repository=runtimeKnowledgeRepository();
-    const dataset=repository.snapshot();
+    const repository=await activeKnowledgeRepository();
+    const dataset=await repository.snapshot();
     const proposal=prepareReferenceProposal(dataset);
     const review=this.hardReview.review(proposal,graphSnapshot(dataset));
     if (!review.accepted) throw new Error(review.findings.map((f)=>f.message).join("；"));
@@ -144,8 +144,8 @@ export class OnlineAgentService {
   }
 
   async answer(input: { sessionId: string; nodeId: string; query: string }): Promise<AgentInteractionResult> {
-    const repository = runtimeKnowledgeRepository();
-    const dataset = repository.snapshot();
+    const repository = await activeKnowledgeRepository();
+    const dataset = await repository.snapshot();
     const runId = randomUUID();
     let run = createAgentRun({ id: runId, sessionId: input.sessionId, kind: "chat", baseRevision: dataset.revision, currentNodeId: input.nodeId, querySummary: clean(input.query, 120), at: now() });
     if (!runtimeLlmConfigStore().status().configured) {
@@ -168,8 +168,8 @@ export class OnlineAgentService {
 
   /** Streaming variant of {@link answer} consumed by the SSE chat route. */
   async *answerStream(input: { sessionId: string; nodeId: string; query: string; signal?: AbortSignal }): AsyncIterable<AnswerStreamEvent> {
-    const repository = runtimeKnowledgeRepository();
-    const dataset = repository.snapshot();
+    const repository = await activeKnowledgeRepository();
+    const dataset = await repository.snapshot();
     const runId = randomUUID();
     let run = createAgentRun({ id: runId, sessionId: input.sessionId, kind: "chat", baseRevision: dataset.revision, currentNodeId: input.nodeId, querySummary: clean(input.query, 120), at: now() });
     if (!runtimeLlmConfigStore().status().configured) {
@@ -223,8 +223,8 @@ export class OnlineAgentService {
   }
 
   async deepSearch(input: { sessionId: string; nodeId: string; query: string; staged?: StagedKnowledgeImport; onProgress?: (message: string) => void; signal?: AbortSignal }): Promise<AgentInteractionResult> {
-    const repository = runtimeKnowledgeRepository();
-    const dataset = repository.snapshot();
+    const repository = await activeKnowledgeRepository();
+    const dataset = await repository.snapshot();
     const target = dataset.nodes.find((item) => item.id === input.nodeId);
     if (!target) throw new Error(`Unknown node: ${input.nodeId}`);
     const runId = randomUUID();
@@ -329,8 +329,8 @@ export class OnlineAgentService {
   }
 
   async prepareCardEdit(input: { sessionId: string; nodeId: string; headline: string; blocks: CardBlock[] }): Promise<PendingChangeView> {
-    const repository = runtimeKnowledgeRepository();
-    const dataset = repository.snapshot();
+    const repository = await activeKnowledgeRepository();
+    const dataset = await repository.snapshot();
     const existing = dataset.cards.find((item) => item.nodeId === input.nodeId);
     if (!existing) throw new Error("Knowledge card does not exist.");
     const card: KnowledgeCard = { ...structuredClone(existing), headline: clean(input.headline, 240), blocks: input.blocks.slice(0, 24).map((block) => ({ ...block, title: clean(block.title, 80), ...(block.text ? { text: clean(block.text, 4_000) } : {}) })), revision: existing.revision + 1 };
@@ -352,11 +352,11 @@ export class OnlineAgentService {
   }
 
   async confirm(input: { sessionId: string; patchId: string; confirmationToken: string }): Promise<ConfirmChangeResult> {
-    const repository = runtimeKnowledgeRepository();
-    const pending = repository.getPendingChange(input.patchId, input.sessionId);
+    const repository = await activeKnowledgeRepository();
+    const pending = await repository.getPendingChange(input.patchId, input.sessionId);
     if (!pending) throw new Error("Pending change was not found for this session.");
     if (pending.confirmationToken !== input.confirmationToken) throw new Error("Confirmation token does not match the pending change.");
-    const storedRun = repository.getRun(pending.runId);
+    const storedRun = await repository.getRun(pending.runId);
     if (!storedRun) throw new Error("Agent run is missing.");
     let run = transitionAgentRun(storedRun, "committing", { actor: "development-agent", summary: "消费用户确认并提交", at: now() });
     await repository.putRun(run);
@@ -369,10 +369,10 @@ export class OnlineAgentService {
   }
 
   async reject(input: { sessionId: string; patchId: string }): Promise<void> {
-    const repository = runtimeKnowledgeRepository();
-    const pending = repository.getPendingChange(input.patchId, input.sessionId);
+    const repository = await activeKnowledgeRepository();
+    const pending = await repository.getPendingChange(input.patchId, input.sessionId);
     if (!pending) throw new Error("Pending change was not found for this session.");
-    const storedRun = repository.getRun(pending.runId);
+    const storedRun = await repository.getRun(pending.runId);
     if (storedRun) await repository.putRun(transitionAgentRun(storedRun, "rejected", { actor: "user", summary: "用户拒绝候选", at: now() }));
     await repository.removePendingChange(input.patchId);
   }

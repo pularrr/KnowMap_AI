@@ -4,7 +4,7 @@ import { stageTextImport } from "../../../../core/ingestion/offline-intake";
 import { onlineAgentService } from "../../../../server/agent/online-agent-service";
 import { matchClaimsToGraph } from "../../../../server/agent/claim-matcher";
 import { createConfiguredLlmProvider } from "../../../../server/llm/provider-factory";
-import { runtimeKnowledgeRepository, runtimeLlmConfigStore } from "../../../../server/runtime/app-runtime";
+import { activeKnowledgeRepository, runtimeLlmConfigStore } from "../../../../server/runtime/app-runtime";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -60,7 +60,7 @@ export async function POST(request: Request) {
     if (runtimeLlmConfigStore().status().configured) {
       try {
         const provider = createConfiguredLlmProvider({ environment: runtimeLlmConfigStore().environment() });
-        matches = await matchClaimsToGraph(provider, runtimeKnowledgeRepository().snapshot(), staged, nodeId);
+      matches = await matchClaimsToGraph(provider, await (await activeKnowledgeRepository()).snapshot(), staged, nodeId);
       } catch {
         // Fail-open.
       }

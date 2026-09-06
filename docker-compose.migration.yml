@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: fmcw_radar
+      POSTGRES_USER: fmcw
+      POSTGRES_PASSWORD: fmcw_dev_password
+    ports: ["5432:5432"]
+    volumes: ["fmcw-postgres:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fmcw -d fmcw_radar"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    volumes: ["fmcw-redis:/data"]
+    command: ["redis-server", "--appendonly", "yes"]
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: fmcw
+      MINIO_ROOT_PASSWORD: fmcw_dev_password
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["fmcw-minio:/data"]
+
+volumes:
+  fmcw-postgres:
+  fmcw-redis:
+  fmcw-minio:
