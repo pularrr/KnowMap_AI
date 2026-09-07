@@ -1,4 +1,4 @@
-import type { ResearchDocument } from "../../server/agent/research-output";
+import type { ResearchDocument } from "../../../../server/agent/research-output";
 
 type Entry = ResearchDocument["proposal"]["newNodes"][number];
 function entry(id:string, canonicalName:string, parentId:string, shortFact:string, principle:string, boundary:string, engineering:string, validation:string, code?:string):Entry {

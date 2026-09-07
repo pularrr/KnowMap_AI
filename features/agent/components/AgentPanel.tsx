@@ -5,7 +5,6 @@ import type { AgentInteractionResult, PendingChangeView } from "../../../core/ag
 import type { KnowledgeNode } from "../../knowledge-graph/model/knowledgeViewModel";
 import { appendKnowledgeHistory } from "../../knowledge-graph/model/knowledgeHistory";
 import { MarkdownMessage } from "./MarkdownMessage";
-import { ACTIVE_PROFILE } from "../../../profiles/active";
 
 type PanelMode = "collapsed" | "compact" | "overlay";
 type MessageRole = "user" | "assistant";
@@ -27,12 +26,19 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
   const [error, setError] = useState("");
   const [ingestKind, setIngestKind] = useState<IngestKind>("document");
   const threadRef = useRef<HTMLDivElement>(null);
+  const shouldFollowThreadRef = useRef(true);
   const jobTextCache = useRef(new Map<string, { revision: number; text: string }>());
 
   useEffect(() => {
     const thread = threadRef.current;
-    if (thread) thread.scrollTop = thread.scrollHeight;
+    if (thread && shouldFollowThreadRef.current) thread.scrollTop = thread.scrollHeight;
   }, [messages]);
+
+  const updateThreadFollowState = () => {
+    const thread = threadRef.current;
+    if (!thread) return;
+    shouldFollowThreadRef.current = thread.scrollHeight - thread.scrollTop - thread.clientHeight <= 24;
+  };
 
   useEffect(() => {
     if (!sessionId || sessionId === "local-session") return;
@@ -79,6 +85,7 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
 
   const startJob = async (kind: "chat" | "deep-search" | "ingest" | "summary", text: string, sourceText?: string) => {
     setBusy(true); setError("");
+    shouldFollowThreadRef.current = true;
     setMode((current) => current === "collapsed" ? "compact" : current);
     try {
       const response = await fetch("/api/agent/jobs", {
@@ -105,6 +112,7 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
     if (busy) return;
     setError("");
     setBusy(true);
+    shouldFollowThreadRef.current = true;
     setMode((current) => (current === "collapsed" ? "compact" : current));
     const pendingId = `file-${Date.now()}`;
     setMessages((current) => [...current, { id: pendingId, role: "assistant", label: `资料整理（${file.name}）`, text: "", streaming: true }]);
@@ -131,6 +139,7 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
 
   const loadReference = async () => {
     setBusy(true);setError("");
+    shouldFollowThreadRef.current = true;
     try {
       const response=await fetch("/api/knowledge/reference",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({sessionId})});
       const result=await response.json() as AgentInteractionResult & {error?:string};
@@ -178,7 +187,6 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
       <header className="graph-agent-head">
         <div><span>AI AGENT</span><strong>{selected.title}</strong></div>
         <div className="graph-agent-actions">
-          {ACTIVE_PROFILE.id === "fmcw-radar" && <button className="summary-button" onClick={() => void loadReference()} disabled={busy}>基准扩充</button>}
           <button className="deep-search-button" onClick={() => void run("deep-search")} disabled={busy}>深度搜索</button>
           <button className="summary-button" onClick={() => void summarize()} disabled={busy}>总结并补充知识</button>
           <label className="summary-button file-upload-label" aria-disabled={busy}>
@@ -192,7 +200,7 @@ export function AgentPanel({ selected, sessionId, onCommitted }: { selected: Kno
       </header>
       {mode !== "collapsed" ? <div className="graph-agent-body">
         <form className="agent-query" onSubmit={ask}><label htmlFor="agent-query">围绕当前节点提问</label><div><textarea id="agent-query" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder={`询问“${selected.title}”，Enter 发送，Shift+Enter 换行；或粘贴资料后点“整理资料”`} /><button type="submit" disabled={busy || !query.trim()} aria-label="发送问题">↑</button></div><div className="ingest-kind-bar"><span>资料类型：</span><select value={ingestKind} onChange={(e) => setIngestKind(e.target.value as IngestKind)} disabled={busy} aria-label="选择资料类型"><option value="document">文档</option><option value="conversation">对话记录</option><option value="summary">知识摘要</option><option value="paper">文献/技术方案</option></select></div>{busy ? <small className="agent-busy-hint">回答生成中，可稍候…</small> : null}</form>
-        <div className="agent-thread" ref={threadRef} aria-live="polite">
+        <div className="agent-thread" ref={threadRef} onScroll={updateThreadFollowState} aria-live="polite">
           {messages.length ? messages.map((message) => (
             <article key={message.id} className={`agent-message ${message.role}${message.result?.candidate ? " knowledge_candidate" : ""}${message.streaming ? " streaming" : ""}`}>
               <span>{message.label}{message.result?.model ? <em>{message.result.model}</em> : null}</span>

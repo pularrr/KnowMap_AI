@@ -1,22 +1,13 @@
-import {
-  branchMeta as baselineBranchMeta,
-  type FormulaMeta,
-  type FormulaSymbol,
-  type KnowledgeNode as LegacyKnowledgeNode,
-} from "../../../app/knowledge";
 import { projectVisibleGraph } from "../../../core/knowledge/traversal";
 import type { CardBlock, EdgeType, KnowledgeDataset } from "../../../core/knowledge/schema";
-import { expandedKnowledgeDataset } from "../../../data/knowledge/deep-slices";
+import { expandedKnowledgeDataset } from "../../../data/knowledge/initial-dataset";
 
 import { ACTIVE_PROFILE } from "../../../profiles/active";
-export const branchMeta = ACTIVE_PROFILE.id === "fmcw-radar" ? baselineBranchMeta : {
-  foundation: { ...baselineBranchMeta.foundation, label: "基础原理" },
-  signal: { ...baselineBranchMeta.signal, label: "信号处理" },
-  data: { ...baselineBranchMeta.data, label: "数据与算法" },
-  system: { ...baselineBranchMeta.system, label: "系统与硬件" },
-  ai: { ...baselineBranchMeta.ai, label: "应用与学习" },
-};
-export type { FormulaSymbol, LegacyKnowledgeNode as KnowledgeNode };
+export type FormulaSymbol = { symbol: string; latex: string; explanation: string; unit?: string };
+export type FormulaMeta = { latex: string; symbols: FormulaSymbol[] };
+export type KnowledgeNode = { id: string; title: string; subtitle: string; branch: string; parent?: string; summary: string; details?: string[]; formula?: string; impact?: string; verification?: string; pitfall?: string };
+const defaultBranch = { color: "#23b5a5", label: "知识域" };
+export const branchMeta: Record<string, { color: string; label: string }> = Object.fromEntries(ACTIVE_PROFILE.visualBranches.map((branch, index) => [branch, { color: ["#23b5a5", "#5b8def", "#8b75ff", "#d3962c", "#e46c9a"][index % 5], label: String(branch) }])) as Record<string, { color: string; label: string }>;
 
 export type KnowledgeCardSection = {
   type: CardBlock["type"];
@@ -32,7 +23,7 @@ export type KnowledgeCardView = {
   sections: KnowledgeCardSection[];
 };
 
-export function toLegacyKnowledgeNodes(dataset: KnowledgeDataset): LegacyKnowledgeNode[] {
+export function toLegacyKnowledgeNodes(dataset: KnowledgeDataset): KnowledgeNode[] {
   const cards = new Map(dataset.cards.map((card) => [card.nodeId, card]));
   const formulasByNode = new Map<string, KnowledgeDataset["formulas"]>();
   for (const formula of dataset.formulas) formulasByNode.set(formula.nodeId, [...(formulasByNode.get(formula.nodeId) ?? []), formula]);
@@ -64,7 +55,7 @@ for (const formula of expandedKnowledgeDataset.formulas) {
   formulasByNode.set(formula.nodeId, [...(formulasByNode.get(formula.nodeId) ?? []), formula]);
 }
 
-export const knowledgeNodes: LegacyKnowledgeNode[] = toLegacyKnowledgeNodes(expandedKnowledgeDataset);
+export const knowledgeNodes: KnowledgeNode[] = toLegacyKnowledgeNodes(expandedKnowledgeDataset);
 
 export const formulaMeta: Record<string, FormulaMeta> = Object.fromEntries(
   expandedKnowledgeDataset.formulas.map((formula) => [

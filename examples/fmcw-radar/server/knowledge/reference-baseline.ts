@@ -1,5 +1,5 @@
-import { referenceResearch } from "../../data/knowledge/react-reference";
-import { expandedKnowledgeDataset } from "../../data/knowledge/deep-slices";
+import { referenceResearch } from "@/examples/fmcw-radar/data/knowledge/react-reference";
+import { expandedKnowledgeDataset } from "@/examples/fmcw-radar/data/knowledge/deep-slices";
 import type { KnowledgeDataset } from "../../core/knowledge/schema";
 import type { KnowledgeProposal } from "../../core/agent/contracts";
 import { operationsFromResearch } from "../agent/research-build";

@@ -20,13 +20,7 @@
     "MvpOutput": "contracts/mvp-output.ts",
     "PluginState": "contracts/plugin-state.ts"
   },
-  "profiles": {
-    "fmcw-radar": {
-      "path": "../profiles/fmcw-radar.ts",
-      "status": "baseline",
-      "description": "FMCW 毫米波雷达知识网络——第一个 Profile，作为基准模板"
-    }
-  },
+  "profiles": {},
   "capabilities": [
     "profile-design",
     "mvp-generation",
@@ -134,7 +128,6 @@
     "plugin",
     "profile",
     "adaptive-research",
-    "mvp-first",
-    "fmcw-radar"
+    "mvp-first"
   ]
 }

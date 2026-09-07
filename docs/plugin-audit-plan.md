@@ -60,7 +60,7 @@
 - 提示/技能发现：宿主索引插件或 Skill 的名称和说明，命中用户任务后再加载详细指令。
 - 可执行工具发现：宿主把工具的 `name`、`description` 和参数 schema 放入当轮模型可见的工具清单；模型选择调用后，由宿主校验参数并执行实现。
 
-`plugin/discovery.mjs` 目前只提供宿主中立描述，`scripts/knowmap.mjs` 提供执行入口。文件存在本身不会让 LLM 自动发现它；每个宿主仍需一个注册适配器。补充 DSH 版可行，采用独立 `adapters/dsh` 包，避免把 DSH 依赖耦合进生成出的知识图谱应用。
+`plugin/discovery.mjs` 目前只提供宿主中立描述，`scripts/knowmap.mjs` 提供执行入口。文件存在本身不会让 LLM 自动发现它；每个宿主仍需一个注册适配器。DSH 版作为独立 `plugins/dsh-plugin` 子包维护，避免把 DSH 依赖耦合进生成出的知识图谱应用。
 
 DSH 适配计划：
 

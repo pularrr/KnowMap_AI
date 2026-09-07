@@ -8,12 +8,10 @@
  */
 
 import type { TaskProfile } from "../../plugin/contracts/task-profile";
-import { FMCW_PROFILE } from "../../profiles/fmcw-radar";
 import { ACTIVE_PROFILE } from "../../profiles/active";
 
 /** 内置 Profile 注册表 */
 const builtinProfiles: Map<string, TaskProfile> = new Map([
-  [FMCW_PROFILE.id, FMCW_PROFILE],
   [ACTIVE_PROFILE.id, ACTIVE_PROFILE],
 ]);
 
@@ -161,6 +159,3 @@ export const defaultProfileLoader = new ProfileLoader(ACTIVE_PROFILE.id);
 /**
  * 便捷函数：获取 FMCW Profile
  */
-export function getFmcwProfile(): TaskProfile {
-  return FMCW_PROFILE;
-}

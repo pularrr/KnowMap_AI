@@ -2,7 +2,7 @@ import {
   crossLinks,
   formulaMeta,
   knowledgeNodes,
-} from "@/app/knowledge";
+} from "@/examples/fmcw-radar/app/knowledge";
 import type {
   CardBlock,
   EdgeType,

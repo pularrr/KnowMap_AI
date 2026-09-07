@@ -1,7 +1,7 @@
 import { getLocalGraph } from "../../../core/knowledge/traversal";
 import { assessCardCoverage } from "../../../core/knowledge/card-section-catalog";
 import type { TraversalReason } from "../../../core/knowledge/schema";
-import { expandedKnowledgeDataset } from "../../../data/knowledge/deep-slices";
+import { expandedKnowledgeDataset } from "../../../data/knowledge/initial-dataset";
 
 const reasonLabels: Record<TraversalReason, string> = {
   anchor: "当前节点",

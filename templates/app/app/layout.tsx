@@ -1,10 +1,9 @@
 import type { Metadata } from "next";
-import { APP_CONFIG } from "./config";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: APP_CONFIG.appName,
-  description: APP_CONFIG.appSubtitle,
+  title: "KnowMap Knowledge Graph",
+  description: "可生成、可审查的 AI 原生知识图谱",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

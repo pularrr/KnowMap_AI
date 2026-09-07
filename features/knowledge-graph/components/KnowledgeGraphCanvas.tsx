@@ -286,7 +286,7 @@ export function KnowledgeGraphCanvas({
                     {node.title.length > 20 ? `${node.title.slice(0, 20)}…` : node.title}
                   </text>
                   <text x="15" y="43" className="node-fact">
-                    {node.subtitle.length > 30 ? `${node.subtitle.slice(0, 30)}…` : node.subtitle}
+                    {node.subtitle.length > 15 ? `${node.subtitle.slice(0, 15)}…` : node.subtitle}
                   </text>
                   <text x="15" y="56" className="node-branch">
                     {branchMeta[node.branch].label}

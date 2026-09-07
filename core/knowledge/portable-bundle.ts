@@ -3,12 +3,12 @@ import type { AgentGraphData } from "../agent/contracts";
 import type { KnowledgeDataset } from "./schema";
 import { validateKnowledgeDataset } from "./validation";
 
-export const KNOWLEDGE_BUNDLE_SCHEMA = "fmcw-knowledge-bundle/1" as const;
+export const KNOWLEDGE_BUNDLE_SCHEMA = "knowmap-knowledge-bundle/1" as const;
 
 export interface PortableKnowledgeBundle {
   schemaVersion: typeof KNOWLEDGE_BUNDLE_SCHEMA;
   exportedAt: string;
-  sourceSystem: "fmcw-radar-knowledge-flow";
+  sourceSystem: "knowmap";
   dataset: KnowledgeDataset;
   checksum: string;
 }
@@ -29,7 +29,7 @@ export function createPortableKnowledgeBundle(
   return {
     schemaVersion: KNOWLEDGE_BUNDLE_SCHEMA,
     exportedAt,
-    sourceSystem: "fmcw-radar-knowledge-flow",
+    sourceSystem: "knowmap",
     dataset: cloned,
     checksum: datasetChecksum(cloned),
   };

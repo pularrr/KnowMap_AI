@@ -13,7 +13,7 @@
  * FMCW 基线零退化是红线：每步抽取后必须验证 FMCW 应用功能不变。
  */
 
-import type { TaskProfile } from "../plugin/contracts/task-profile";
+import type { TaskProfile } from "../../../plugin/contracts/task-profile";
 import { FMCW_PROMPTS } from "./prompts/fmcw-prompts";
 
 /**

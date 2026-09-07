@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "FMCW Radar Knowledge Flow",
-  description: "FMCW 雷达全栈学习路线与可交互知识图谱",
+  title: "KnowMap Knowledge Graph",
+  description: "可生成、可审查的 AI 原生知识图谱",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

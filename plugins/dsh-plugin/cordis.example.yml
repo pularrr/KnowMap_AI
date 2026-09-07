@@ -1,6 +1,6 @@
 - insert:
     - id: knowmap
-      name: '/absolute/path/to/fmcw-radar-knowledge-graph/adapters/dsh/src/index.ts'
+      name: '/absolute/path/to/knowmap-skill/plugins/dsh-plugin/src/index.ts'
       config:
         projectRoot: '/absolute/path/to/fmcw-radar-knowledge-graph'
         outputRoot: '/absolute/path/to/separate-knowmap-build'

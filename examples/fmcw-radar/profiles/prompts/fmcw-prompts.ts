@@ -13,7 +13,7 @@
  * 节点粒度约束作为通用基础，所有 Profile 共享；FMCW 可追加主题特定指令。
  */
 
-import type { PromptConfig } from "../../plugin/contracts/task-profile";
+import type { PromptConfig } from "../../../../plugin/contracts/task-profile";
 
 /**
  * ReAct 深度检索提示词

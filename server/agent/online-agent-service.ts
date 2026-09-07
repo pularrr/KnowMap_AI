@@ -1,6 +1,5 @@
 import { collectAdaptiveResearch } from "./adaptive-research";
 import { ACTIVE_PROFILE } from "../../profiles/active";
-import { prepareReferenceProposal } from "../knowledge/reference-baseline";
 import { operationsFromResearch } from "./research-build";
 import { parseObject, requestResearch } from "./research-output";
 import { randomUUID } from "node:crypto";
@@ -47,7 +46,7 @@ export type AnswerStreamEvent =
   | { type: "done"; result: AgentInteractionResult }
   | { type: "error"; message: string };
 
-const ANSWER_INSTRUCTIONS = `你是 FMCW 雷达领域知识助手。请围绕用户的问题直接作答，给出准确、完整、结构清晰的回答。回答应主要基于问题本身与你的领域知识：下面提供的“知识领域”只用于说明用户当前所处领域与关注点，不是唯一依据，也不要逐字复述图谱原始数据。
+const ANSWER_INSTRUCTIONS = `你是知识图谱领域助手。请围绕用户的问题直接作答，给出准确、完整、结构清晰的回答。回答应主要基于问题本身与你的领域知识：下面提供的“知识领域”只用于说明用户当前所处领域与关注点，不是唯一依据，也不要逐字复述图谱原始数据。
 请使用 Markdown 组织回答：标题（## / ###）、无序/有序列表、加粗、行内代码、代码块、表格。数学公式必须使用标准 LaTeX：行内公式用 $...$，独立公式用 $$...$$ 单独成段，例如距离分辨率 $\Delta R = c/(2B)$；不要使用 [Z=...] 或纯文本描述公式。回答要充实完整，尽量覆盖问题的关键方面、原理推导、工程取舍与常见误区；若数据或结论存在不确定性、缺少依据，请明确说明，不要编造具体数值。不要声称修改了图谱。
 禁止生成 Markdown 图片语法（![...](...)）、图表或任何需要外部图片资源的内容；如需说明结构，请用文字、列表或表格描述。禁止输出思维过程或元话语，直接给出回答。`;
 
@@ -127,21 +126,6 @@ export class OnlineAgentService {
   private readonly hardReview = new OfflineReviewAgent();
   private readonly buildAgent = new OfflineBuildAgent();
 
-  async prepareReference(sessionId:string):Promise<AgentInteractionResult> {
-    const repository=await activeKnowledgeRepository();
-    const dataset=await repository.snapshot();
-    const proposal=prepareReferenceProposal(dataset);
-    const review=this.hardReview.review(proposal,graphSnapshot(dataset));
-    if (!review.accepted) throw new Error(review.findings.map((f)=>f.message).join("；"));
-    const patch=this.buildAgent.build(proposal,review,graphSnapshot(dataset));
-    const issued=confirmationTokenService().issue(patch,sessionId);
-    const runId=randomUUID();
-    let run=createAgentRun({id:runId,sessionId,kind:"ingest",baseRevision:dataset.revision,currentNodeId:"fmcw",querySummary:"开发助手基准扩充",at:now()});
-    for (const status of ["knowledge_researching","semantic_reviewing","building","awaiting_user_confirmation"] as const) run=transitionAgentRun(run,status,{actor:"development-agent",summary:"载入已由开发助手整理和审查的基准",at:now(),changes:{proposalId:proposal.id,patchId:patch.id,confirmationExpiresAt:issued.expiresAt}});
-    await repository.putRun(run);
-    await repository.putPendingChange({runId,patchId:patch.id,sessionId,proposal,review,patch,confirmationToken:issued.token,confirmationExpiresAt:issued.expiresAt});
-    return {runId,mode:"offline",text:proposal.context.conversationSummary,observations:[],candidate:{runId,proposalId:proposal.id,patchId:patch.id,summary:proposal.summary,rationale:proposal.rationale,operations:patch.operations,projectionDiff:patch.projectionDiff,findings:review.findings,confirmationToken:issued.token,confirmationExpiresAt:issued.expiresAt}};
-  }
 
   async answer(input: { sessionId: string; nodeId: string; query: string }): Promise<AgentInteractionResult> {
     const repository = await activeKnowledgeRepository();
@@ -158,7 +142,7 @@ export class OnlineAgentService {
     await repository.putRun(run);
     const provider = createConfiguredLlmProvider({ environment: runtimeLlmConfigStore().environment() });
     const response = await provider.createResponse({
-      instructions: ANSWER_INSTRUCTIONS.replace("FMCW 雷达领域", ACTIVE_PROFILE.name) + "\n" + ACTIVE_PROFILE.prompts.finalResponse + "\n" + (ACTIVE_PROFILE.prompts.topicAppendix ?? ""),
+      instructions: ANSWER_INSTRUCTIONS + "\n当前主题：" + ACTIVE_PROFILE.name + "\n" + (ACTIVE_PROFILE.prompts.topicAppendix ?? ""),
       messages: [{ role: "user", content: answerPrompt(dataset, input.nodeId, input.query) }],
     });
     run = transitionAgentRun(run, "applied", { actor: "development-agent", summary: "在线回答完成", at: now() });
@@ -188,7 +172,7 @@ export class OnlineAgentService {
     const provider = createConfiguredLlmProvider({ environment: runtimeLlmConfigStore().environment() });
     const request = {
       signal: input.signal,
-      instructions: ANSWER_INSTRUCTIONS.replace("FMCW 雷达领域", ACTIVE_PROFILE.name) + "\n" + ACTIVE_PROFILE.prompts.finalResponse + "\n" + (ACTIVE_PROFILE.prompts.topicAppendix ?? ""),
+      instructions: ANSWER_INSTRUCTIONS + "\n当前主题：" + ACTIVE_PROFILE.name + "\n" + (ACTIVE_PROFILE.prompts.topicAppendix ?? ""),
       messages: [{ role: "user", content: answerPrompt(dataset, input.nodeId, input.query) }],
     } as const;
     yield { type: "meta", runId, mode: "online", provider: provider.name };
@@ -333,7 +317,7 @@ export class OnlineAgentService {
     const dataset = await repository.snapshot();
     const existing = dataset.cards.find((item) => item.nodeId === input.nodeId);
     if (!existing) throw new Error("Knowledge card does not exist.");
-    const card: KnowledgeCard = { ...structuredClone(existing), headline: clean(input.headline, 240), blocks: input.blocks.slice(0, 24).map((block) => ({ ...block, title: clean(block.title, 80), ...(block.text ? { text: clean(block.text, 4_000) } : {}) })), revision: existing.revision + 1 };
+    const card: KnowledgeCard = { ...structuredClone(existing), headline: clean(input.headline, 80), blocks: input.blocks.slice(0, 24).map((block) => ({ ...block, title: clean(block.title, 80), ...(block.text ? { text: clean(block.text, 4_000) } : {}) })), revision: existing.revision + 1 };
     const operations: GraphOperation[] = [{ kind: "upsert-card", card }, { kind: "append-history", entry: { id: deterministicId("history", { nodeId: input.nodeId, revision: dataset.revision, card }), nodeId: input.nodeId, kind: "revision_applied", summary: "用户编辑知识卡片", occurredAt: now(), revision: dataset.revision } }];
     const runId = randomUUID();
     let run = createAgentRun({ id: runId, sessionId: input.sessionId, kind: "card_edit", baseRevision: dataset.revision, currentNodeId: input.nodeId, querySummary: "用户编辑知识卡片", at: now() });

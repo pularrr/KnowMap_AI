@@ -10,7 +10,7 @@ import { KnowledgeTree } from "../features/knowledge-graph/components/KnowledgeT
 import { createLayoutIndex } from "../features/knowledge-graph/layout/legacySvgLayout";
 import { toLegacyKnowledgeNodes } from "../features/knowledge-graph/model/knowledgeViewModel";
 import type { KnowledgeDataset } from "../core/knowledge/schema";
-import { expandedKnowledgeDataset } from "../data/knowledge/deep-slices";
+import { expandedKnowledgeDataset } from "../data/knowledge/initial-dataset";
 import { ACTIVE_PROFILE } from "../profiles/active";
 import { APP_CONFIG } from "./config";
 
@@ -84,7 +84,7 @@ export default function Home() {
     };
     const stop = () => {
       window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop);
-      window.localStorage.setItem(side === "left" ? `${APP_CONFIG.storagePrefix}-left-width` : `${APP_CONFIG.storagePrefix}-right-width`, String(lastWidth));
+      window.localStorage.setItem(`${APP_CONFIG.storagePrefix}-${side}-width`, String(lastWidth));
     };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop, { once: true });
   };
@@ -109,7 +109,7 @@ export default function Home() {
         </div>
       </header>
 
-      <section className="workspace" style={workspaceStyle} aria-label={`${APP_CONFIG.appName}工作区`}>
+      <section className="workspace" style={workspaceStyle} aria-label="知识图谱工作区">
         <KnowledgeTree focusId={focusId} selectedId={selectedId} onReveal={reveal} nodes={nodes} layoutIndex={layoutIndex} />
         <div className="resize-handle left" role="separator" tabIndex={0} aria-label="调整左侧宽度" onPointerDown={(event) => startResize("left", event)} onKeyDown={(event) => { if (event.key === "ArrowLeft") resizeByKeyboard("left", -1); if (event.key === "ArrowRight") resizeByKeyboard("left", 1); }} />
         <div className="graph-workbench"><KnowledgeGraphCanvas focusId={focusId} selectedId={selectedId} onSelect={setSelectedId} onReveal={reveal} dataset={dataset} layoutIndex={layoutIndex} /><AgentPanel selected={selected} sessionId={sessionId} onReveal={reveal} onCommitted={refreshDataset} /></div>

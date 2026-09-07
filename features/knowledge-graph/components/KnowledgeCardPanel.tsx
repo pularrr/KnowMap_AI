@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { PendingChangeView } from "../../../core/agent/online-contracts";
 import { getCardSectionDefinition } from "../../../core/knowledge/card-section-catalog";
 import type { CardBlock, KnowledgeCollectionKind, KnowledgeDataset, KnowledgeHistoryKind } from "../../../core/knowledge/schema";
-import { expandedKnowledgeDataset } from "../../../data/knowledge/deep-slices";
+import { expandedKnowledgeDataset } from "../../../data/knowledge/initial-dataset";
 import { branchMeta, getKnowledgeCardFromDataset, toLegacyKnowledgeNodes } from "../model/knowledgeViewModel";
 import { useKnowledgeHistory } from "../model/knowledgeHistory";
 import { ancestorsOf, createLayoutIndex, type LayoutIndex } from "../layout/legacySvgLayout";
@@ -86,7 +86,7 @@ export function KnowledgeCardPanel({ selectedId, onReveal, dataset = expandedKno
 
       {editing ? (
         <div className="card-editor">
-          <label>卡片摘要<textarea value={draftHeadline} onChange={(event) => setDraftHeadline(event.target.value)} /></label>
+          <label>卡片摘要<textarea value={draftHeadline} maxLength={80} onChange={(event) => setDraftHeadline(event.target.value)} /></label>
           {draftBlocks.map((block, indexValue) => (
             <fieldset key={`${block.type}-${indexValue}`}><legend>{getCardSectionDefinition(block.type).label}</legend>
               <input value={block.title} onChange={(event) => setDraftBlocks((items) => items.map((item, indexItem) => indexItem === indexValue ? { ...item, title: event.target.value } : item))} />
@@ -97,7 +97,7 @@ export function KnowledgeCardPanel({ selectedId, onReveal, dataset = expandedKno
           {pending ? <p className="edit-preview">将更新 {pending.projectionDiff.cards.updated.length + pending.projectionDiff.cards.added.length} 张卡片；确认前不会写入。</p> : null}
           {saveError ? <p className="form-error">{saveError}</p> : null}
         </div>
-      ) : <p className="detail-summary"><strong>{selected.title}</strong>：{selected.summary.slice(0, 12)}</p>}
+      ) : <p className="detail-summary"><strong>{selected.title}</strong>：{selected.summary}</p>}
 
       {!editing ? <>
         <div className="knowledge-card-tabs" role="tablist" aria-label="知识卡片分类">{([ ["theory", "理论知识"], ["application", "应用知识"], ["other", "其他知识"], ["history", "历史修改"] ] as const).map(([id, label]) => <button key={id} role="tab" aria-selected={activePage === id} className={activePage === id ? "active" : ""} onClick={() => setActivePage(id)}>{label}</button>)}</div>
