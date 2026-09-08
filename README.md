@@ -1,8 +1,8 @@
 # KnowMap AI
 
-KnowMap 是一个通用的 AI 原生知识图谱构建 Skill。它将主题 Profile、知识网络校验、应用脚手架和数据注入组合为确定性工作流，帮助宿主 LLM 生成可独立运行、可审查、可回滚的知识图谱应用。
+KnowMap 是一个通用的 AI 原生知识图谱构建 Skill 同时有DSH插件版本。它将主题 Profile、知识网络校验、应用脚手架和数据注入组合为确定性工作流，帮助宿主 LLM 生成可独立运行、可审查、可回滚的知识图谱应用。
 
-FMCW 雷达不再是框架默认主题，而是独立的完整基线示例；DSH 也不属于 Skill 核心，而是独立插件包。
+FMCW 雷达知识图谱是独立的完整基线示例。
 
 ## 项目边界
 
@@ -14,8 +14,6 @@ KnowMap Skill
 ├─ examples/fmcw-radar/      独立 FMCW 基线与运行时状态
 └─ plugins/dsh-plugin/       独立 DSH 插件，不被主 Skill 加载
 ```
-
-新主题应用只依赖 `plugin/`、`templates/app/` 及用户确认的 Profile/Network；不会读取 FMCW 示例，也不会加载 DSH 依赖。
 
 ## Skill 构建流程
 
