@@ -2,6 +2,8 @@ import type { GraphOperation } from "../../core/agent/contracts";
 import { deterministicId } from "../../core/agent/graph-operations";
 import type { CardBlock, KnowledgeCard, KnowledgeDataset, KnowledgeEdge, KnowledgeEvidence, KnowledgeNode, NodeType } from "../../core/knowledge/schema";
 import { CARD_SECTION_CATALOG } from "../../core/knowledge/card-section-catalog";
+import { isTopologyLeaf } from "../../core/knowledge/topology";
+import { nodeRoleForType } from "../../core/knowledge/schema";
 import type { StagedKnowledgeImport } from "../../core/ingestion/contracts";
 import type { ResearchDocument } from "./research-output";
 
@@ -22,7 +24,15 @@ export function operationsFromResearch(document: ResearchDocument, dataset: Know
   const operations: GraphOperation[] = evidence.map((item) => ({ kind:"upsert-evidence", evidence:item }));
   if (staged) {
     operations.push({ kind:"upsert-source", source:staged.artifact });
-    for (const claim of staged.claims) operations.push({ kind:"upsert-claim", claim });
+    // Conversation segmentation can yield identical paragraphs.  Claims use a
+    // deterministic id, so emitting both would create two operations aimed at
+    // the same record and correctly fail the hard-review gate.
+    const claimIds = new Set<string>();
+    for (const claim of staged.claims) {
+      if (claimIds.has(claim.id)) continue;
+      claimIds.add(claim.id);
+      operations.push({ kind:"upsert-claim", claim });
+    }
   }
   const cards = new Map<string,KnowledgeCard>();
   function addBlock(nodeId: string, raw: { type: string; title: string; text: string; items?: string[]; code?: string; language?: CardBlock["language"] }) {
@@ -63,7 +73,7 @@ export function operationsFromResearch(document: ResearchDocument, dataset: Know
       if (existing) { plannedCategoryIds.push(existing); continue; }
       const id = deterministicId("knowledge", normalize(categoryName));
       refs.set(normalize(categoryName), id);
-      additions.set(id, { canonicalName: categoryName, shortFact: `用于归组“${nodes.get(parentId)?.canonicalName ?? parentId}”下的相关知识。`, nodeType: "category", parentId, blocks: [] });
+      additions.set(id, { canonicalName: categoryName, shortFact: `用于归组“${nodes.get(parentId)?.canonicalName ?? parentId}”下的相关知识。`, nodeRole: "category", nodeType: "category", parentId, blocks: [] });
       plannedCategoryIds.push(id);
     }
   }
@@ -74,7 +84,8 @@ export function operationsFromResearch(document: ResearchDocument, dataset: Know
       const parentId = proposed.parentId ? resolve(proposed.parentId) : currentNodeId;
       const parent = parentId ? nodes.get(parentId) : undefined;
       if (!parent) continue;
-      const node: KnowledgeNode = { id, canonicalName:proposed.canonicalName, shortFact:proposed.shortFact, aliases:[], nodeType:nodeTypes.has(proposed.nodeType) ? proposed.nodeType as NodeType : "concept",
+      const nodeType = nodeTypes.has(proposed.nodeType) ? proposed.nodeType as NodeType : "concept";
+      const node: KnowledgeNode = { id, canonicalName:proposed.canonicalName, shortFact:proposed.shortFact, aliases:[], nodeRole: proposed.nodeRole ?? nodeRoleForType(nodeType), nodeType,
         primaryParentId:parent.id, domainId:parent.domainId, visualBranch:parent.visualBranch, level:parent.level+1, order:order++, tags:["agent-generated"], status:"reviewed" };
       nodes.set(id,node); operations.push({ kind:"upsert-node",node });
       additions.delete(id); progress = true;
@@ -87,7 +98,7 @@ export function operationsFromResearch(document: ResearchDocument, dataset: Know
       const leaf = leafId ? nodes.get(leafId) : undefined;
       const category = categoryId ? nodes.get(categoryId) : undefined;
       if (!leaf || !category || category.nodeType !== "category") throw new Error(`分类重挂载无法解析：${hint.leafName} → ${hint.toCategory}`);
-      if (dataset.nodes.some((node) => node.primaryParentId === leaf.id)) throw new Error(`分类重挂载只能移动叶子节点：${leaf.canonicalName}`);
+      if (!isTopologyLeaf(leaf.id, dataset.nodes)) throw new Error(`分类重挂载只能移动拓扑叶子节点：${leaf.canonicalName}`);
       const updated = { ...leaf, primaryParentId: category.id, domainId: category.domainId, visualBranch: category.visualBranch, level: category.level + 1 };
       nodes.set(updated.id, updated); operations.push({ kind:"upsert-node", node:updated });
     }

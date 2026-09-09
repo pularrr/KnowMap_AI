@@ -40,15 +40,17 @@ metadata:
 | 6 注入 | knowmap.mjs inject --input <隔离目录>/reviewed.json --output <隔离目录>/app | data/runtime/knowledge-state.json | 使用 RuntimeKnowledgeRepository 生成封装和 checksum，并回读比较 |
 | 7 交付 | 产物目录 npm install、npm run type-check、npm test、npm run build、npm run dev | 可启动应用、验收记录 | 图谱、聊天、卡片、LaTeX、字号、资料入口；区分离线检查和真实提供商验收 |
 
-生成 MVP 或完整网络前必须读取 [先总后分的层级构造法](references/hierarchy-construction.md)。Profile 启用 hierarchy 时先生成导航中间层并完成宽度审查，再生成具体节点和卡片；CodeGraph 等任务使用 Profile 声明的仓库导航层级，禁止把“一个节点一个概念”解释为把所有细概念直接平铺在域下。
+生成 MVP 或完整网络前必须完整读取 [先总后分的层级构造法](references/hierarchy-construction.md) 和 [知识卡语义与内容判定](references/knowledge-card-semantics.md)。Profile 启用 hierarchy 时先生成导航中间层并完成宽度与深度审查，再生成具体节点和卡片；CodeGraph 等任务使用 Profile 声明的仓库导航层级，禁止把“一个节点一个概念”解释为把所有细概念直接平铺在域下。
 
-MVP 未确认时必须停在展示阶段；必须明确询问用户是否验收当前 MVP。只有用户明确验收后，宿主才可设置 `confirmedMvp: true` 或 `mvpConfirmation.confirmed: true` 并生成完整网络。调整域、根或主题范围后原确认失效，必须重新展示并重新验收 MVP。`confirmedMvp` 是宿主传递的用户确认标记，不是模型推断值或自动生成的审批证据。
+MVP 未确认时必须停在展示阶段。展示 MVP 时必须同时给出预算提案。用户验收后，宿主必须先用 `sync-budget` 将批准预算写回 Profile，再用 `plan` 生成共享主题队列；不能只把预算放在确认 JSON 中而继续运行。
 
 ## 质量与预算
 
 - 域数、节点数、类型数、栏目数是建议，不按固定数量凑内容。MVP 建议15–30节点，完整建议80–150节点；不设输出节点数硬上限。
 - 当前引擎支持基础12种节点类型（含中间导航用 category）、12种边类型、13种栏目；它们是可选分类词表，不是通用的13项填写清单。宿主必须根据任务重新选择 cardSections 子集、适用节点类型和覆盖级别，通常只要求 definition，其他栏目只在语义适合时使用。架构图、代码图等任务不得机械套用研究热点、公式假设或典型应用。新类型或新栏目不能只靠 JSON 获得 UI 和工具支持，需要先扩展引擎。配色使用 foundation/signal/data/system/ai，语义域 ID 可自定义。
-- MVP 在根主题上执行2–3轮，最多2次浅搜索，禁用拆分子调用；只保留 definition。完整模式逐主题重置轮次，按时间、调用、访问主题预算停止。“访问主题预算”不是输出节点上限。
+- MVP 在根主题上执行2–3轮，最多2次浅搜索，禁用拆分子调用；运行时上限为5分钟、1个访问主题、12次模型调用，只保留 definition。完整模式把每个访问节点当作新的局部根并逐节点重置局部预算。完整开发的访问主题预算只统计实际拥有下级节点的非叶父主题；经研究确认没有孩子的拓扑叶子可继续补卡但不计数。整次任务只共享用户验收过的时间、调用保险丝和非叶父主题预算。
+- 不设置从总根累计的最大树深度。完整网络以语义链完整为准，通常应形成至少 6 层的代表性路径；复杂主题可更深。Profile 的旧 `hierarchy.maxDepth` 只能解释为一次局部扩展的观察半径，不得据此阻止第 N 层节点继续作为父节点扩展。
+- 完整开发不能只写节点摘要。理论知识与应用知识按知识卡语义规范选择最低覆盖；适用的原理、公式、输入输出、流程、工程取舍、失效和验证不得因“栏目可选”而被保守省略。
 - 35分钟约束研究阶段；安装、构建、人工审查额外计时。不把预算耗尽称为收敛，不把模拟输出称为真实检索。
 - 多概念、名称>20字、摘要>80字、problem 混入方法、父节点直接子节点超过 Profile 上限（默认8）和平铺叶子概念由共享校验产生 warning。拆分应同步修复父级、卡片和边；不要机械截断名字、编号分组或凭字符串命中删除知识。
 - KnowledgeNetwork 是 nodes/cardBlocks/relations（可带 evidence）；KnowledgeDataset 是 nodes/cards/edges/domains/formulas；runtime 文件还有 state、schemaVersion、checksum。不可将裸 network 直接改名成 knowledge-state.json。

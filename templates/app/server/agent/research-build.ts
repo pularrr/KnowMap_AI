@@ -2,6 +2,7 @@ import type { GraphOperation } from "../../core/agent/contracts";
 import { deterministicId } from "../../core/agent/graph-operations";
 import type { CardBlock, KnowledgeCard, KnowledgeDataset, KnowledgeEdge, KnowledgeEvidence, KnowledgeNode, NodeType } from "../../core/knowledge/schema";
 import { CARD_SECTION_CATALOG } from "../../core/knowledge/card-section-catalog";
+import { isTopologyLeaf } from "../../core/knowledge/topology";
 import type { StagedKnowledgeImport } from "../../core/ingestion/contracts";
 import type { ResearchDocument } from "./research-output";
 
@@ -87,7 +88,7 @@ export function operationsFromResearch(document: ResearchDocument, dataset: Know
       const leaf = leafId ? nodes.get(leafId) : undefined;
       const category = categoryId ? nodes.get(categoryId) : undefined;
       if (!leaf || !category || category.nodeType !== "category") throw new Error(`分类重挂载无法解析：${hint.leafName} → ${hint.toCategory}`);
-      if (dataset.nodes.some((node) => node.primaryParentId === leaf.id)) throw new Error(`分类重挂载只能移动叶子节点：${leaf.canonicalName}`);
+      if (!isTopologyLeaf(leaf.id, dataset.nodes)) throw new Error(`分类重挂载只能移动拓扑叶子节点：${leaf.canonicalName}`);
       const updated = { ...leaf, primaryParentId: category.id, domainId: category.domainId, visualBranch: category.visualBranch, level: category.level + 1 };
       nodes.set(updated.id, updated); operations.push({ kind:"upsert-node", node:updated });
     }

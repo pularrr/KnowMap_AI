@@ -107,7 +107,9 @@ export interface MvpOutput {
   nextSteps: {
     fullDevelopmentEstimate: {
       nodeCount: [number, number];   // 预计节点数 [80, 150]
-      durationMinutes: [number, number];  // 预计时间 [25, 40]
+      durationMinutes: [number, number];  // 待用户验收的预计时间，默认 [25, 35]
+      visitTopicCount: [number, number];  // 待用户验收的非叶父主题数，默认 [80, 300]，叶子不计
+      maxModelCalls: number;              // 待用户验收的调用保险丝，默认 4096
       reactRounds: [number, number];      // 预计 ReAct 轮次 [6, 24]
     };
     suggestedAdjustments?: AdjustmentDirection[];  // 建议的调整方向（3-5 个）
@@ -120,6 +122,11 @@ export interface MvpOutput {
 export interface MvpConfirmation {
   confirmed: boolean;
   profileId: string;
+  approvedBudget?: {
+    durationMinutes: [number, number];
+    visitTopicCount: [number, number];
+    maxModelCalls: number;
+  };
 
   // 如果确认，锁定的设计
   lockedDesign?: {

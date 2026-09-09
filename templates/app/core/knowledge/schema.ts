@@ -56,10 +56,12 @@ export const NODE_TYPE_SEMANTICS: Record<NodeType, { singular: string; forbidden
   application: { singular: "一个应用场景", forbidden: ["多个并列场景"], note: "只描述一个应用场景的需求、约束和方案" },
 };
 
-/** 非叶子（分类/导航）节点类型：domain 与 category 不承载具体知识，需进一步细分。 */
-export const NON_LEAF_TYPES = new Set<NodeType>(["domain", "category"]);
-export function isLeafType(nodeType: NodeType): boolean { return !NON_LEAF_TYPES.has(nodeType); }
-export function isLeafNode(node: { nodeType: NodeType }): boolean { return isLeafType(node.nodeType); }
+/** Navigation types are semantic containers; this is not a topology decision. */
+export const NAVIGATION_NODE_TYPES = new Set<NodeType>(["domain", "category"]);
+export const NON_LEAF_TYPES = NAVIGATION_NODE_TYPES;
+export function isKnowledgeEntityType(nodeType: NodeType): boolean { return !NAVIGATION_NODE_TYPES.has(nodeType); }
+export function isLeafType(nodeType: NodeType): boolean { return isKnowledgeEntityType(nodeType); }
+export function isLeafNode(node: { nodeType: NodeType }): boolean { return isKnowledgeEntityType(node.nodeType); }
 
 export type KnowledgeStatus = "draft" | "reviewed" | "published";
 

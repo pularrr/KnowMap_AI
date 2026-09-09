@@ -1,4 +1,5 @@
 import type { EdgeType, KnowledgeDataset, KnowledgeEdge } from "./schema";
+import { hierarchyReviewPolicy, reviewPrimaryHierarchy } from "./hierarchy-review";
 import type { TaskProfile } from "../../plugin/contracts/task-profile";
 import { ACTIVE_PROFILE } from "../../profiles/active";
 
@@ -109,19 +110,8 @@ export function validateKnowledgeDataset(dataset: KnowledgeDataset, options?: Va
     if (!node.primaryParentId) continue;
     childrenByParent.set(node.primaryParentId, [...(childrenByParent.get(node.primaryParentId) ?? []), node]);
   }
-  for (const [parentId, children] of childrenByParent) {
-    const parent = nodeById.get(parentId);
-    if (!parent || children.length <= maxPrimaryChildren) continue;
-    add("warning", "TOO_MANY_PRIMARY_CHILDREN",
-      `父节点“${parent.canonicalName}”有 ${children.length} 个直接子节点，建议不超过 ${maxPrimaryChildren} 个。请先按一个稳定维度建立 2–${maxPrimaryChildren} 个 category 中间节点，再把细粒度节点归入类别。`,
-      parentId);
-    const leafConcepts = children.filter((child) => child.nodeType === "concept" && !(childrenByParent.get(child.id)?.length)).length;
-    if (leafConcepts / children.length >= 0.75) {
-      add("warning", "FLAT_CONCEPT_CLUSTER",
-        `父节点“${parent.canonicalName}”的直接子节点主要是叶子概念（${leafConcepts}/${children.length}），层级可能过平。应先识别概念族、阶段、机制或子系统，再展开具体概念。`,
-        parentId);
-    }
-  }
+  const hierarchyFindings = reviewPrimaryHierarchy(dataset.nodes, hierarchyReviewPolicy(options?.profile ?? { validation: { maxPrimaryChildren }, hierarchy: undefined }));
+  for (const finding of hierarchyFindings) add("warning", finding.code, finding.message, finding.entityId);
   if (hierarchy?.enabled) {
     const intermediateTypes = new Set(hierarchy.intermediateNodeTypes);
     for (const node of dataset.nodes) {
@@ -131,7 +121,6 @@ export function validateKnowledgeDataset(dataset: KnowledgeDataset, options?: Va
       if (hierarchy.minMembersPerIntermediate && members.length < hierarchy.minMembersPerIntermediate) {
         add("warning", "SPARSE_INTERMEDIATE_CATEGORY", `中间节点“${node.canonicalName}”只有 ${members.length} 个子节点，低于 Profile 的建议值 ${hierarchy.minMembersPerIntermediate}。请确认其边界是否足够独立。`, node.id);
       }
-      if (hierarchy.maxDepth && node.level > hierarchy.maxDepth) add("warning", "HIERARCHY_TOO_DEEP", `节点“${node.canonicalName}”位于第 ${node.level} 层，超过 Profile 建议深度 ${hierarchy.maxDepth}。`, node.id);
     }
   }
   const roots = dataset.nodes.filter((node) => node.primaryParentId === null);

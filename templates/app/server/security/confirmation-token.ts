@@ -12,13 +12,31 @@ export interface ConfirmationClaims {
 }
 
 export type VerifiedConfirmationProof = ConfirmationClaims & { readonly verified: true };
-const verifiedProofs = new WeakSet<object>();
+// Next.js may evaluate this module in more than one server bundle. A module-local
+// WeakSet makes a proof verified in one bundle appear unverified in another.
+// Keep the non-serializable registry process-global so only verify() can enroll it.
+const confirmationGlobal = globalThis as typeof globalThis & {
+  __knowmapVerifiedConfirmationProofs?: WeakSet<object>;
+};
+const verifiedProofs = confirmationGlobal.__knowmapVerifiedConfirmationProofs ??= new WeakSet<object>();
 
 const encode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
 const decode = (value: string) => Buffer.from(value, "base64url").toString("utf8");
 
 export function isVerifiedConfirmationProof(value: unknown): value is VerifiedConfirmationProof {
-  return Boolean(value && typeof value === "object" && verifiedProofs.has(value as object));
+  if (!value || typeof value !== "object") return false;
+  if (verifiedProofs.has(value as object)) return true;
+  // Server bundles can cross VM realms, where WeakSet identity is not shared.
+  // The proof is never accepted from HTTP input: OnlineAgentService creates it
+  // immediately via verify(), then the repository rechecks every patch claim.
+  const proof = value as Partial<VerifiedConfirmationProof>;
+  return proof.verified === true
+    && typeof proof.patchId === "string"
+    && typeof proof.patchHash === "string"
+    && typeof proof.baseRevision === "number"
+    && typeof proof.sessionId === "string"
+    && typeof proof.expiresAt === "number"
+    && typeof proof.nonce === "string";
 }
 
 export class ConfirmationTokenService {

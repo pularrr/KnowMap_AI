@@ -19,7 +19,7 @@ npm run build
 
 ## 主要文件
 
-- `app/knowledge.ts`：FMCW 雷达知识图谱节点与关系数据。
+- 知识数据：由 Profile、经审查的网络 JSON 与运行时 `data/runtime/knowledge-state.json` 共同构成；根项目不再内置 FMCW 静态基线。
 - `app/page.tsx`：渐进披露式知识图谱界面与交互逻辑。
 - `app/globals.css`：明暗主题、画布、节点和响应式样式。
 - `package.json`、`package-lock.json`：依赖及运行脚本。

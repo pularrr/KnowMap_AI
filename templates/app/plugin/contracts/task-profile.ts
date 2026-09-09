@@ -61,7 +61,7 @@ export interface HierarchyConfig {
   enabled: boolean;
   intermediateNodeTypes: string[];
   planningThreshold?: number; // 达到此数量时提示先设计归组，默认 6
-  maxDepth?: number;          // 建议最大主树深度，默认 6
+  maxDepth?: number;          // 兼容旧 Profile：局部观察/展开半径，不能解释为从总根累计的树深上限
   minMembersPerIntermediate?: number; // 可选；不设置时单叶类别合法
 }
 
@@ -90,6 +90,8 @@ export interface InitializationConfig {
   };
   full: {
     nodeCount: [number, number];      // 完整开发节点数 [80, 150]
+    visitTopicCount?: [number, number]; // 完整开发预计扩展的非叶父主题数；默认 [80, 300]，叶子不计
+    maxModelCalls?: number;           // 全局模型调用保险丝；默认 4096，不是期望消耗量
     reactRounds: [number, number];    // 完整开发 ReAct 轮次 [6, 24]
     rootBudgetMinutes: [number, number]; // 根节点预算 [25, 35]
     durationMinutes: [number, number];  // 完整开发时间 [25, 40]

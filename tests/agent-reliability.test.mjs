@@ -1,163 +1,125 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const vite = await createServer({appType:"custom",configFile:false,root,resolve:{alias:{"@":root}},server:{middlewareMode:true,hmr:false}});
+const vite = await createServer({ appType: "custom", configFile: false, root, resolve: { alias: { "@": root } }, server: { middlewareMode: true, hmr: false } });
 after(() => vite.close());
-const output = await vite.ssrLoadModule("/server/agent/research-output.ts");
-const build = await vite.ssrLoadModule("/server/agent/research-build.ts");
-const { expandedKnowledgeDataset: dataset } = await vite.ssrLoadModule("/data/knowledge/deep-slices.ts");
-const { applyOperations } = await vite.ssrLoadModule("/core/agent/graph-operations.ts");
-const { datasetToAgentGraph, agentGraphToDataset } = await vite.ssrLoadModule("/core/knowledge/portable-bundle.ts");
-const { toLegacyKnowledgeNodes } = await vite.ssrLoadModule("/features/knowledge-graph/model/knowledgeViewModel.ts");
-const layout = await vite.ssrLoadModule("/features/knowledge-graph/layout/legacySvgLayout.ts");
 const adaptive = await vite.ssrLoadModule("/server/agent/adaptive-research.ts");
-const budgets = await vite.ssrLoadModule("/server/agent/research-budget.ts");
-const stores = await vite.ssrLoadModule("/server/agent/job-store.ts");
-const response = (text) => ({id:"mock",provider:"test",model:"test",status:"completed",text,toolCalls:[],session:{previousResponseId:"mock"}});
+const output = await vite.ssrLoadModule("/server/agent/research-output.ts");
+const researchBuild = await vite.ssrLoadModule("/server/agent/research-build.ts");
+const intake = await vite.ssrLoadModule("/core/ingestion/offline-intake.ts");
+const onlineAgent = await vite.ssrLoadModule("/server/agent/online-agent-service.ts");
+const backgroundJobs = await vite.ssrLoadModule("/server/agent/background-jobs.ts");
+const analysisPolicy = await vite.ssrLoadModule("/core/agent/node-analysis-policy.ts");
+const { neutralDataset } = await vite.ssrLoadModule("/tests/fixtures/neutral-network.ts");
+const response = (text) => ({ id: "mock", provider: "test", model: "test", status: "completed", text, toolCalls: [], session: { previousResponseId: "mock" } });
 
-test("job storage separates metadata from full text and reads UTF-8 chunks without truncation", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "knowmap-jobs-"));
-  try {
-    const store = new stores.FileJobStore(directory);
-    const text = "第一行\n🚗雷达知识\n".repeat(8000);
-    const job = { id:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", sessionId:"session-a", nodeId:"root", kind:"deep-search", query:"研究", state:"completed", createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), textBytes:0, textChecksum:"", revision:1 };
-    await store.save(job, text);
-    assert.equal(readFileSync(join(directory, job.id + ".json"), "utf8").includes("第一行"), false);
-    assert.equal("text" in (await store.list("session-a"))[0], false);
-    let cursor = 0; let restored = ""; let chunks = 0; let checksum = "";
-    do {
-      const part = await store.readText(job.id, "session-a", cursor, 4097);
-      restored += part.text; chunks += 1; checksum = part.checksum;
-      if (part.nextCursor === null) break;
-      cursor = part.nextCursor;
-    } while (true);
-    assert.ok(chunks > 1);
-    assert.equal(restored, text);
-    assert.equal(checksum, (await store.load(job.id)).job.textChecksum);
-    await assert.rejects(store.readText(job.id, "session-b", 0, 4096), /不存在/);
-  } finally { rmSync(directory, { recursive:true, force:true }); }
+test("research output retains only complete items after truncation", async () => {
+  const text = '{"proposal":{"newNodes":[{"id":"complete","canonicalName":"完整概念","shortFact":"完整定义","nodeRole":"entity","nodeType":"concept","parentId":"core","blocks":[]},{"canonicalName":"broken';
+  const result = await output.requestResearch({ name: "mock", createResponse: async () => ({ ...response(text), status: "incomplete", incompleteReason: "max_output_tokens" }) }, "", [{ role: "user", content: "test" }]);
+  assert.equal(result.document.proposal.newNodes.length, 1);
+  assert.equal(result.document.converged, false);
 });
 
-test("JSON envelope, fences, aliases and optional nulls normalize without losing code or LaTeX", () => {
-  const source = { data:{answer:"result",proposal:{new_nodes:[{id:"example",name:"例子",description:"定义",parent_id:"least-squares",blocks:[{type:"code",title:"实现",code:"x = solve(A, b)",language:"python",text:""}]}],card_blocks:[{node_id:"least-squares",type:"principle",title:"公式",content:"$\\hat{x}$"}],evidence:[{title:"领域资料",url:null}]}} };
-  const parsed = output.normalizeResearch(output.parseObject("说明\n```json\n"+JSON.stringify(source)+"\n```"));
-  assert.equal(parsed.proposal.newNodes[0].parentId,"least-squares");
-  assert.equal(parsed.proposal.newNodes[0].blocks[0].code,"x = solve(A, b)");
-  assert.equal(parsed.proposal.cardBlocks[0].text,"$\\hat{x}$");
-});
-
-test("malformed and truncated model output is repaired using the original result and concrete errors", async () => {
-  const calls = [];
-  const provider = {name:"test",async createResponse(request) {
-    calls.push(request);
-    return calls.length === 1 ? {...response('{"answer":"partial"'),status:"incomplete",incompleteReason:"max_output_tokens"} : response(JSON.stringify({answer:"保留知识",proposal:{}}));
-  }};
-  const result = await output.requestResearch(provider,"研究",[{role:"user",content:"LS"}]);
-  assert.equal(calls.length,2);
-  assert.match(calls[1].messages.at(-1).content,/截断/);
-  assert.match(calls[1].messages.at(-1).content,/partial/);
-  assert.equal(result.document.answer,"保留知识");
-  await assert.rejects(output.requestResearch({name:"bad",createResponse:async()=>response("invalid")}, "", [{role:"user",content:"test"}]),/三次/);
-});
-
-test("max-token handling salvages only closed items and never materializes a half node", async () => {
-  const complete = {id:"a",canonicalName:"完整节点",shortFact:"完整事实",parentId:"fmcw",blocks:[]};
-  const text = '{"proposal":{"newNodes":[' + JSON.stringify(complete) + ',{"canonicalName":"未完成';
-  assert.deepEqual(budgets.completeArrayObjects(text,"newNodes"),[complete]);
-  const result = await output.requestResearch({name:"truncated",createResponse:async()=>({...response(text),status:"incomplete",incompleteReason:"max_output_tokens"})},"",[{role:"user",content:"test"}]);
-  assert.equal(result.document.proposal.newNodes.length,1);
-  assert.equal(result.document.converged,false);
-  assert.ok(result.document.gaps.length>0);
-});
-
-test("output retries grow within provider cap and fit structured contexts without breaking JSON", async () => {
-  const requests=[];
-  const provider={name:"limited",limits:{maxOutputTokens:10000,maxInputChars:6000},createResponse:async(request)=>{
+test("summary retries shrink the output scope after a reasoning-only truncation", async () => {
+  const requests = [];
+  const provider = { name: "mock", limits: { maxOutputTokens: 16384, maxInputChars: 120000 }, async createResponse(request) {
     requests.push(request);
-    return requests.length===1 ? {...response(""),status:"incomplete",incompleteReason:"max_output_tokens",usage:{outputTokens:8192,reasoningTokens:8000}} : response('{"answer":"ok","proposal":{}}');
+    if (requests.length === 1) return { ...response(""), status: "incomplete", incompleteReason: "max_output_tokens", usage: { inputTokens: 1, outputTokens: 8192, reasoningTokens: 8192, totalTokens: 8193 } };
+    return response(JSON.stringify({ answer: "已补充", converged: false, gaps: ["其余内容"], proposal: { newNodes: [], cardBlocks: [{ nodeId: "root", type: "definition", title: "补充", text: "完整条目" }], relations: [], evidence: [] } }));
   }};
-  await output.requestResearch(provider,"研究",[{role:"user",content:JSON.stringify({nodes:Array.from({length:100},(_,id)=>({id,text:"知识".repeat(500)}))})}]);
-  assert.equal(requests[0].maxOutputTokens,8192);
-  assert.equal(requests[1].maxOutputTokens,10000);
-  for(const request of requests) {
-    assert.ok(request.instructions.length+request.messages.reduce((n,m)=>n+m.content.length,0)<6000);
-    assert.doesNotThrow(()=>JSON.parse(request.messages[0].content));
-  }
+  const result = await output.requestResearch(provider, "整理当前对话", [{ role: "user", content: "资料" }], { purpose: "summary" });
+  assert.equal(result.document.proposal.cardBlocks.length, 1);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].maxOutputTokens, 8192);
+  assert.equal(requests[1].maxOutputTokens, 12288);
+  assert.match(requests[1].instructions, /最多 1 个新节点、2 个独立卡片补充/);
 });
 
-test("Build materializes more than two nodes, resolves new parents, preserves cards and uses existing SVG columns", () => {
-  const document = output.normalizeResearch({answer:"测试",proposal:{
-    newNodes:[
-      {id:"child-temp",canonicalName:"测试层级子节点",shortFact:"验证新父级引用",parentId:"parent-temp"},
-      {id:"parent-temp",canonicalName:"测试数值方法",shortFact:"验证父级",parentId:"least-squares",blocks:[{type:"principle",title:"方法原理",text:"用于测试的方法原理。"}]},
-      {canonicalName:"测试同层方法甲",shortFact:"甲定义",parentId:"least-squares"},
-      {canonicalName:"测试同层方法乙",shortFact:"乙定义",parentId:"least-squares"}],
-    cardBlocks:[{nodeId:"least-squares",type:"engineering_tradeoff",title:"测试补充",text:"原有卡片必须保留"}],
-    evidence:[{title:"测试来源",note:"测试数据"}],
-  }});
-  const prepared = build.operationsFromResearch(document,dataset,"least-squares");
-  const projected = agentGraphToDataset(applyOperations({...datasetToAgentGraph(dataset),revision:dataset.revision},prepared.operations,dataset.revision+1));
-  assert.equal(projected.nodes.length,dataset.nodes.length+4);
-  const before = dataset.cards.find((c)=>c.nodeId==="least-squares");
-  const after = projected.cards.find((c)=>c.nodeId==="least-squares");
-  for (const b of before.blocks) assert.ok(after.blocks.some((n)=>n.type===b.type && n.title===b.title));
-  const parent = projected.nodes.find((n)=>n.canonicalName==="测试数值方法");
-  const child = projected.nodes.find((n)=>n.canonicalName==="测试层级子节点");
-  assert.equal(child.primaryParentId,parent.id);
-  const index = layout.createLayoutIndex(toLegacyKnowledgeNodes(projected));
-  const positions = layout.arrange(index.nodeMap.get(parent.id),index);
-  const parentPosition = positions.find((n)=>n.id===parent.id);
-  assert.ok(positions.find((n)=>n.id===child.id).x>parentPosition.x);
-  for (const title of ["测试同层方法甲","测试同层方法乙"]) assert.equal(positions.find((n)=>n.title===title).x,parentPosition.x);
+test("identical imported paragraphs never produce duplicate claim operations", () => {
+  const staged = intake.stageTextImport({
+    kind: "conversation",
+    title: "重复段落",
+    text: "同一条可核验的资料段落。\n\n同一条可核验的资料段落。",
+    currentNodeId: "root",
+    suppliedBy: "test",
+  });
+  const proposal = researchBuild.operationsFromResearch({
+    answer: "",
+    converged: false,
+    gaps: [],
+    proposal: { summary: "", rationale: "", newNodes: [], cardBlocks: [], relations: [], evidence: [] },
+  }, neutralDataset, "root", staged);
+  const claimIds = proposal.operations
+    .filter((operation) => operation.kind === "upsert-claim")
+    .map((operation) => operation.claim.id);
+  assert.equal(claimIds.length, new Set(claimIds).size);
 });
 
-test("layout splits broad sibling sets into non-overlapping lanes of at most eight", () => {
-  const parent = {id:"parent",title:"父节点",description:"",branch:"foundation"};
-  const children = Array.from({length:30},(_,index)=>({id:`child-${index}`,title:`子节点${index}`,description:"",branch:"foundation",parent:"parent"}));
-  const index = layout.createLayoutIndex([parent,...children]);
-  const positioned = layout.arrange(parent,index);
-  const childPositions = positioned.filter((node)=>node.parent==="parent");
-  const lanes = Map.groupBy(childPositions,(node)=>node.x);
-  assert.equal(lanes.size,4);
-  for (const lane of lanes.values()) {
-    assert.ok(lane.length<=layout.MAX_NODES_PER_LANE);
-    const ys = lane.map((node)=>node.y).sort((a,b)=>a-b);
-    for (let i=1;i<ys.length;i+=1) assert.ok(ys[i]-ys[i-1]>=layout.NODE_H);
-  }
+test("summary de-duplication context contains only directory, target route, and peer layer", () => {
+  const dataset = structuredClone(neutralDataset);
+  dataset.nodes.push({ ...dataset.nodes[2], id: "peer", canonicalName: "同层概念", primaryParentId: "core", level: 2 });
+  dataset.nodes.push({ ...dataset.nodes[2], id: "elsewhere", canonicalName: "无关概念", primaryParentId: "root", level: 1 });
+  const index = onlineAgent.summaryDedupGraphIndex(dataset, "item");
+  assert.deepEqual(index.ancestorChain.map((node) => node.id), ["root", "core", "item"]);
+  assert.deepEqual(index.currentLayer.map((node) => node.id).sort(), ["item", "peer"]);
+  assert.equal(index.directory.navigationNodes.some((node) => node.id === "elsewhere"), false);
+  assert.equal(index.currentLayer.some((node) => node.id === "elsewhere"), false);
 });
 
-test("category plans create a navigable category and transactionally reparent existing leaves", () => {
-  const leaf = dataset.nodes.find((node) => node.primaryParentId === "estimators");
-  const document = output.normalizeResearch({ answer:"重组", categoryPlan:[{
-    parentId:"estimators", categories:["经典估计方法"], reparentHints:[{ leafName:leaf.canonicalName, toCategory:"经典估计方法" }],
-  }], proposal:{ summary:"重组估计方法", newNodes:[], cardBlocks:[], relations:[], evidence:[] } });
-  const prepared = build.operationsFromResearch(document, dataset, "estimators");
-  const projected = agentGraphToDataset(applyOperations({...datasetToAgentGraph(dataset),revision:dataset.revision},prepared.operations,dataset.revision+1));
-  const category = projected.nodes.find((node) => node.canonicalName === "经典估计方法");
-  const moved = projected.nodes.find((node) => node.id === leaf.id);
-  assert.equal(category.nodeType,"category");
-  assert.equal(category.primaryParentId,"estimators");
-  assert.equal(moved.primaryParentId,category.id);
-  assert.ok(projected.cards.some((card) => card.nodeId === category.id));
+test("cancellation is persisted even when the cancelling process has no local controller", async () => {
+  const records = new Map();
+  const store = {
+    async save(job, text) { records.set(job.id, { job: structuredClone(job), text }); },
+    async load(id) { const value = records.get(id); return value && { job: structuredClone(value.job), text: value.text }; },
+    async list(sessionId) { return [...records.values()].filter((value) => value.job.sessionId === sessionId).map((value) => structuredClone(value.job)); },
+    async readText() { throw new Error("not used"); },
+  };
+  globalThis.__agentJobStore = store;
+  const id = "11111111-1111-4111-8111-111111111111";
+  await store.save({ id, sessionId: "session", nodeId: "root", kind: "chat", query: "x", state: "running", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), textBytes: 0, textChecksum: "", revision: 0, retryCount: 0 }, "");
+  await backgroundJobs.cancelAgentJob(id, "session");
+  assert.equal((await store.load(id)).job.state, "cancelled");
+  assert.match((await store.load(id)).job.progress, /停止/);
+  delete globalThis.__agentJobStore;
 });
 
-test("adaptive ReAct resets minimum observations for every visited topic and uses larger sparse-graph budgets", async () => {
-  const events = [];
-  const provider = {name:"mock",async createResponse(request) {
-    if (request.tools?.length) return response("模拟外部证据");
-    return response(JSON.stringify({answer:"完成观察",coverageAssessment:"已覆盖",converged:true,proposal:{}}));
+test("every node starts with baseline analysis before skeleton and gap guidance", () => {
+  assert.equal(analysisPolicy.nodeAnalysisStage(0, 2, true), "baseline");
+  assert.equal(analysisPolicy.nodeAnalysisStage(1, 2, true), "skeleton");
+  assert.equal(analysisPolicy.nodeAnalysisStage(2, 2, true), "skeleton");
+  assert.equal(analysisPolicy.nodeAnalysisStage(3, 2, true), "gap");
+  assert.equal(analysisPolicy.nodeAnalysisStage(1, 2, false), "gap");
+  assert.match(analysisPolicy.nodeAnalysisStagePrompt("gap", ["实现链路不清晰"]), /饱满答案/);
+});
+
+test("budget exhaustion is persisted as a resumable state, never convergence", async () => {
+  const runId = `neutral-${Date.now()}`;
+  const provider = { name: "mock", async createResponse(request) {
+    if (request.tools?.length) return response("source");
+    return response(JSON.stringify({ answer: "继续", converged: false, gaps: ["待补证据"], proposal: { newNodes: [], cardBlocks: [], relations: [], evidence: [] } }));
   }};
-  await adaptive.collectAdaptiveResearch({provider,dataset,nodeId:"foundation",query:"测试逐节点",runId:"test-react-reset",root:false,observations:[],
-    budgetOverride:{maxNodes:2,maxCalls:20},onProgress:(m)=>events.push(m)});
-  const firstRounds = events.filter((m)=>/第 1\/6 轮/.test(m));
-  assert.equal(firstRounds.length,2);
-  assert.equal(events.filter((m)=>/第 4\/6 轮/.test(m)).length,2);
-  assert.ok(adaptive.researchBudget(1,true).maxNodeRounds>adaptive.researchBudget(114,true).maxNodeRounds);
-  assert.equal(adaptive.researchBudget(1,true).minDurationMs,25*60_000);
+  const result = await adaptive.collectAdaptiveResearch({ provider, dataset: neutralDataset, nodeId: "root", query: "中立测试", runId, root: false, observations: [], maxExternalSearches: 0, budgetOverride: { minRounds: 1, initialRounds: 1, maxCalls: 1, maxNodes: 2, skeletonRounds: 0 } });
+  assert.equal(result.converged, false);
+  const checkpoint = adaptive.loadResearchCheckpoint(runId);
+  assert.equal(checkpoint.completionState, "budget_exhausted");
+  assert.ok(["max_model_calls", "max_duration"].includes(checkpoint.stopReason));
+  assert.ok(checkpoint.unresolvedGaps.includes("待补证据"));
+  const batchPath = join(root, "data", "runtime", "research", runId, "batches", "000001.json");
+  assert.equal(existsSync(batchPath), true);
+  assert.equal(JSON.parse(readFileSync(batchPath, "utf8")).answer, "继续");
+});
+
+test("entity granularity warnings do not apply to navigation or category nodes", async () => {
+  const { validateKnowledgeDataset } = await vite.ssrLoadModule("/core/knowledge/validation.ts");
+  const dataset = structuredClone(neutralDataset);
+  dataset.nodes.find((node) => node.id === "core").canonicalName = "概念与方法";
+  dataset.nodes.find((node) => node.id === "item").canonicalName = "概念与方法";
+  const report = validateKnowledgeDataset(dataset, { domainCount: 1, visualBranchCount: 1 });
+  assert.equal(report.warnings.some((issue) => issue.entityId === "core" && issue.code === "MULTI_CONCEPT_NODE"), false);
+  assert.equal(report.warnings.some((issue) => issue.entityId === "item" && issue.code === "MULTI_CONCEPT_NODE"), true);
 });

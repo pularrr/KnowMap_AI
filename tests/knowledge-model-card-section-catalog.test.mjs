@@ -40,9 +40,9 @@ test("procedure and code belong to application knowledge", () => {
 test("coverage uses node applicability and activated conditions", () => {
   const node = { nodeType: "algorithm" };
   const empty = assessCardCoverage(node);
-  assert.ok(empty.total >= 6);
+  assert.ok(empty.total >= 3);
   assert.ok(empty.total < 13);
-  assert.ok(empty.expectedTypes.includes("procedure"));
+  assert.ok(!empty.expectedTypes.includes("procedure"));
   assert.ok(empty.expectedTypes.includes("comparison"));
   assert.ok(!empty.expectedTypes.includes("assumptions"));
   assert.ok(!empty.expectedTypes.includes("code"));

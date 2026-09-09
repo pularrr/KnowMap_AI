@@ -13,7 +13,26 @@ test("discovery exposes an executable host-neutral contract", () => {
   assert.equal(d.inputSchema.properties.action.enum.includes("full"), false);
   assert.ok(d.inputSchema.properties.action.enum.includes("inject"));
   assert.equal(d.inputSchema.additionalProperties, false);
+  assert.ok(d.inputSchema.properties.action.enum.includes("sync-budget"));
+  assert.ok(d.inputSchema.properties.action.enum.includes("plan"));
   assert.match(d.hostResponsibilities.join(" "), /宿主 LLM/);
+});
+
+test("approved MVP budget is synchronized into the executable Profile", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "knowmap-budget-sync-"));
+  try {
+    const profileFile = join(directory, "request.json"), output = join(directory, "profile.json");
+    await withProjectModules(async load => {
+      const { LIDAR_TECH_ROUTE_PROFILE: profile } = await load("/plugin/examples/lidar-profile-example.ts");
+      writeFileSync(profileFile, JSON.stringify({ profile, approvedBudget: { durationMinutes: [20, 30], visitTopicCount: [80, 300], maxModelCalls: 4096 } }));
+    });
+    await runKnowmap({ action: "sync-budget", input: profileFile, output });
+    const synchronized = JSON.parse(readFileSync(output, "utf8"));
+    assert.deepEqual(synchronized.initialization.full.rootBudgetMinutes, [20, 30]);
+    assert.deepEqual(synchronized.initialization.full.durationMinutes, [20, 30]);
+    assert.deepEqual(synchronized.initialization.full.visitTopicCount, [80, 300]);
+    assert.equal(synchronized.initialization.full.maxModelCalls, 4096);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("build-time provider actions are rejected before reading project configuration", async () => {

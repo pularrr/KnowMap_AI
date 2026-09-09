@@ -359,8 +359,16 @@ export class OnlineAgentService {
     if (!storedRun) throw new Error("Agent run is missing.");
     let run = transitionAgentRun(storedRun, "committing", { actor: "development-agent", summary: "消费用户确认并提交", at: now() });
     await repository.putRun(run);
-    const proof = confirmationTokenService().verify(input.confirmationToken, pending.patch, input.sessionId);
-    const applied = await repository.applyConfirmedPatch(pending.patch, proof, "user");
+    let applied: Awaited<ReturnType<typeof repository.applyConfirmedPatch>>;
+    try {
+      const proof = confirmationTokenService().verify(input.confirmationToken, pending.patch, input.sessionId);
+      applied = await repository.applyConfirmedPatch(pending.patch, proof, "user");
+    } catch (error) {
+      run = transitionAgentRun(run, "failed", { actor: "development-agent", summary: "确认提交失败，清理待确认变更", at: now(), changes: { failureCode: "commit_failed" } });
+      await repository.putRun(run);
+      await repository.removePendingChange(input.patchId);
+      throw error;
+    }
     run = transitionAgentRun(run, "applied", { actor: "development-agent", summary: `写入修订 ${applied.dataset.revision}`, at: now() });
     await repository.putRun(run);
     await repository.removePendingChange(input.patchId);
@@ -372,7 +380,10 @@ export class OnlineAgentService {
     const pending = repository.getPendingChange(input.patchId, input.sessionId);
     if (!pending) throw new Error("Pending change was not found for this session.");
     const storedRun = repository.getRun(pending.runId);
-    if (storedRun) await repository.putRun(transitionAgentRun(storedRun, "rejected", { actor: "user", summary: "用户拒绝候选", at: now() }));
+    if (storedRun) {
+      const terminal = storedRun.status === "committing" ? "failed" : "rejected";
+      await repository.putRun(transitionAgentRun(storedRun, terminal, { actor: terminal === "failed" ? "development-agent" : "user", summary: terminal === "failed" ? "清理未完成提交" : "用户拒绝候选", at: now(), changes: terminal === "failed" ? { failureCode: "commit_interrupted" } : undefined }));
+    }
     await repository.removePendingChange(input.patchId);
   }
 }

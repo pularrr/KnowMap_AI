@@ -18,6 +18,7 @@ import type { LlmProvider, LlmMessage } from "../../core/llm/contracts";
 import { structuredOutputCall } from "../llm/structured-output";
 import type { TaskProfile } from "../../plugin/contracts/task-profile";
 import { collectAdaptiveResearch } from "./adaptive-research";
+import type { TopicQueueState } from "../../core/agent/topic-queue";
 import type { KnowledgeDataset, KnowledgeNode as DatasetNode, KnowledgeCard, KnowledgeEdge, SemanticDomain } from "../../core/knowledge/schema";
 import type { ResearchDocument } from "./research-output";
 
@@ -316,7 +317,7 @@ export class KnowledgeGenerator {
    * 真正复用 FMCW 的 collectAdaptiveResearch（逐节点 ReAct 重置、自适应预算、
    * 上下文管理、分布式子调用、批量合并、收敛判断）
    */
-  async generate(): Promise<GenerationResult> {
+  async generate(options: { queueState?: TopicQueueState } = {}): Promise<GenerationResult> {
     this.warnings = [];
     this.distributedCalls = 0;
 
@@ -363,6 +364,7 @@ export class KnowledgeGenerator {
       observations,
       budgetOverride,
       profile: this.profile, // 注入 Profile 配置
+      queueState: options.queueState,
       onProgress: (msg) => {
         this.warnings.push(msg);
       },

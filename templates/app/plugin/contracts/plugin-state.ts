@@ -90,7 +90,7 @@ export interface PluginConfig {
   budget: {
     mvpMaxMinutes: number;       // MVP 最大时间（5 分钟）
     fullMaxMinutes: number;      // 完整开发最大时间（40 分钟）
-    rootMaxCalls: number;        // 根节点最大调用数（360）
+    rootMaxCalls: number;        // 根任务模型调用保险丝（默认4096，由 MVP 验收预算覆盖）
     maxToolRounds: number;       // 最大工具轮次（8）
     distributeThreshold: {       // 分布式子调用触发阈值
       gaps: number;               // 3

@@ -13,6 +13,7 @@ import { KnowledgeGenerator } from "../../../../server/agent/knowledge-generator
 import { FMCW_PROFILE } from "../../../../profiles/fmcw-radar";
 import { createConfiguredLlmProvider } from "../../../../server/llm/provider-factory";
 import type { TaskProfile } from "../../../../plugin/contracts/task-profile";
+import { applyApprovedBudget, parseApprovedResearchBudget } from "../../../../core/agent/research-budget-policy";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // 5 分钟超时（MVP 模式）
@@ -21,7 +22,7 @@ export const maxDuration = 300; // 5 分钟超时（MVP 模式）
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { topic, profile: customProfile, profileId, mode = "mvp", writeToFile = false } = body;
+    const { topic, profile: customProfile, profileId, mode = "mvp", writeToFile = false, approvedBudget, queueState } = body;
 
     if (!topic) {
       return NextResponse.json(
@@ -43,10 +44,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (mode === "full") {
+      if (!approvedBudget) return NextResponse.json({ error: "完整开发需要用户验收并提交 approvedBudget" }, { status: 400 });
+      try { profile = applyApprovedBudget(profile, parseApprovedResearchBudget(approvedBudget)); }
+      catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "approvedBudget 无效" }, { status: 400 }); }
+    }
+
     // 使用统一的 LlmProvider（自动处理推理模型兼容、tool_choice 剥离等）
     const provider = createConfiguredLlmProvider();
     const generator = new KnowledgeGenerator(provider, topic, profile, mode);
-    const result = await generator.generate();
+    const result = await generator.generate({ queueState });
 
     let filePath: string | undefined;
     if (writeToFile) {
