@@ -77,14 +77,14 @@ export async function cancelAgentJob(id: string, sessionId: string) {
   if (process.env.AGENT_QUEUE_MODE === "redis") await agentQueue().cancel(id);
 }
 
-export async function startAgentJob(input: { id?: string; sessionId: string; nodeId: string; kind: AgentJob["kind"]; query: string; sourceText?: string; sourceKind?: "conversation" | "summary" | "paper" | "document" }): Promise<AgentJobSummary> {
+export async function startAgentJob(input: { id?: string; sessionId: string; nodeId: string; kind: AgentJob["kind"]; query: string; sourceText?: string; sourceKind?: "conversation" | "summary" | "paper" | "document"; codeRepositoryId?: string }): Promise<AgentJobSummary> {
   const existing = input.id ? await runtimeAgentJobStore().load(input.id) : undefined;
   if (existing?.job.state === "cancelled") {
     return { ...existing.job, result: undefined, hasResult: Boolean(existing.job.result) };
   }
   if ((await listAgentJobs(input.sessionId, { limit: 50 })).jobs.filter((job) => job.state === "running" || job.state === "queued").length >= 3) throw new Error("已有三个任务运行中，请等待其中一个完成。");
   const at = new Date().toISOString();
-  const job: AgentJob = { id: input.id ?? randomUUID(), sessionId: input.sessionId, nodeId: input.nodeId, kind: input.kind, query: input.query, sourceText: input.sourceText, sourceKind: input.sourceKind, state: "queued", createdAt: at, updatedAt: at, text: "", textBytes: 0, textChecksum: "", revision: 0, retryCount: 0 };
+  const job: AgentJob = { id: input.id ?? randomUUID(), sessionId: input.sessionId, nodeId: input.nodeId, kind: input.kind, query: input.query, sourceText: input.sourceText, sourceKind: input.sourceKind, codeRepositoryId: input.kind === "chat" ? input.codeRepositoryId : undefined, state: "queued", createdAt: at, updatedAt: at, text: "", textBytes: 0, textChecksum: "", revision: 0, retryCount: 0 };
   const controller = new AbortController(); controllers.set(job.id, controller);
   running.add(job.id); await persist(job);
   if (process.env.AGENT_QUEUE_MODE === "redis" && !input.id) {

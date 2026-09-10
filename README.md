@@ -96,6 +96,16 @@ Next.js UI ── API / 后台任务 ── OnlineAgentService ── LLM Provid
 
 构建层的入口是 [`scripts/knowmap.mjs`](scripts/knowmap.mjs) 和 [`scripts/create-app.mjs`](scripts/create-app.mjs)。它由宿主 LLM 直接生成结构化 JSON；构建阶段明确禁止调用项目中配置的付费 Provider。运行层入口是生成应用的 `/api/agent/*` 与 `/api/knowledge/*`，由应用内 Agent 使用用户配置的 LLM。
 
+### 源码解读：将项目知识落到真实实现
+
+常规资料图谱的构建流程保持不变。用户可在运行时的 Agent 面板主动连接一个本地源码目录，应用在根节点下新增独立的“源码解读”分支：仓库、目录和文件作为导航节点，按需补充函数、类等符号节点；原知识节点不被改写。知识卡片中的“关联实现”只保存可审查的代码事实（文件、行号、符号、索引版本），用来把“为什么这样设计”的知识说明与“代码在哪里实现”连接起来。
+
+此能力使用本地 CodeGraph CLI（以 @colbymchenry/codegraph 1.6.0 为准），需要先在用户机器安装：npm install -g @colbymchenry/codegraph；可用 codegraph version 验证。服务端是唯一调用 CLI 的一方：浏览器只提交用户明确授权的绝对路径，服务端建立或同步索引、读取文件和上下文，再把受限的代码片段与定位信息注入应用内 LLM。应用内 LLM 不直接执行本地命令，也不能自行浏览任意目录。
+
+为减少误读与越权，默认只允许项目工作目录；如需连接其他目录，可用 CODEGRAPH_ALLOWED_ROOTS 配置授权根目录（Windows 使用分号分隔多个路径）。索引会排除 .git、node_modules、构建产物、覆盖率目录、.env 和密钥类文件，且绝不执行被解读项目的代码。源码问答选择“源码解读”后才附带对应仓库的最小上下文；结果显示文件与行号引用，模型解释和 CodeGraph 事实分开保存。
+
+首次体验可将本仓库连接到一个已授权的示例项目目录，例如 text-workbench-assistant-arch-map/app：连接后点击索引，即可看到“源码解读”分支；针对 Agent、Skill 或可靠性节点提问时，系统会按问题取回少量相关文件/符号，并在知识卡片显示关联实现。新生成的 KnowMap 应用会继承这套通用接入层；已生成的旧应用不会被自动覆盖。完整需求与阶段说明见 [CODEGRAPH_REQUIREMENTS_AND_PLAN.md](docs/CODEGRAPH_REQUIREMENTS_AND_PLAN.md)。
+
 ### 核心数据模型
 
 - **Node**：`domain`、`category`、`entity` 三种导航角色与更细的 `nodeType` 分离；只有实体节点受“一个节点一个具体知识对象”约束。
